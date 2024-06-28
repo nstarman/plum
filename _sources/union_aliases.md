@@ -13,7 +13,7 @@ from typing import Union
 from plum import dispatch
 
 
-scalar_types = sum(np.sctypes.values(), [])  # All NumPy scalar types
+scalar_types = sum(np.core.sctypes.values(), [])  # All NumPy scalar types
 Scalar = Union[tuple(scalar_types)]  # Union of all NumPy scalar types
 
 
@@ -64,7 +64,7 @@ Hurray!
 Note that the documentation prints `Union[Scalar]` rather than just `Scalar`.
 This is intentional: it is to prevent breaking code that depends on how unions
 print.
-For example, printing just `Scalar` would omit the type parameter(s). 
+For example, printing just `Scalar` would omit the type parameter(s).
 
 Let's see with a few more examples how this works:
 
@@ -88,22 +88,21 @@ If we don't include all of `scalar_types`, we won't see `Scalar`, as desired:
 %
 % import sys
 
-% skip: next if(sys.version_info < (3, 9), reason="Requires Python 3.9 or higher.")
+% skip: next "Result depends on NumPy version."
 
 ```python
 >>> Union[tuple(scalar_types[:-1])]
-typing.Union[numpy.int8, numpy.int16, numpy.int32, numpy.int64, numpy.uint8, numpy.uint16, numpy.uint32, numpy.uint64, numpy.float16, numpy.float32, numpy.float64, numpy.longdouble, numpy.complex64, numpy.complex128, numpy.clongdouble, bool, object, bytes, str]
+typing.Union[numpy.int8, numpy.int16, numpy.int32, numpy.longlong, numpy.int64, numpy.uint8, numpy.uint16, numpy.uint32, numpy.uint64, numpy.ulonglong, numpy.float16, numpy.float32, numpy.float64, numpy.longdouble, numpy.complex64, numpy.complex128, numpy.clongdouble, numpy.str_, numpy.bytes_, numpy.void, numpy.bool]
 ```
 
 You can deactivate union aliases with `deactivate_union_aliases`:
-
 
 ```python
 >>> from plum import deactivate_union_aliases
 
 >>> deactivate_union_aliases()
 
-% skip: next if(sys.version_info < (3, 9), reason="Requires Python 3.9 or higher.")
+% skip: next "Result depends on NumPy version."
 >>> Scalar
-typing.Union[numpy.int8, numpy.int16, numpy.int32, numpy.int64, numpy.uint8, numpy.uint16, numpy.uint32, numpy.uint64, numpy.float16, numpy.float32, numpy.float64, numpy.longdouble, numpy.complex64, numpy.complex128, numpy.clongdouble, bool, object, bytes, str, numpy.void]
+typing.Union[numpy.int8, numpy.int16, numpy.int32, numpy.longlong, numpy.int64, numpy.uint8, numpy.uint16, numpy.uint32, numpy.uint64, numpy.ulonglong, numpy.float16, numpy.float32, numpy.float64, numpy.longdouble, numpy.complex64, numpy.complex128, numpy.clongdouble, numpy.str_, numpy.bytes_, numpy.void, numpy.bool, numpy.object_]
 ```

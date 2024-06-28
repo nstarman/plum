@@ -351,7 +351,6 @@ document.write(`
 <span class="kn">from</span> <span class="nn">beartype.door</span> <span class="kn">import</span> <span class="n">TypeHint</span>
 
 <span class="kn">import</span> <span class="nn">plum.function</span>
-
 <span class="kn">from</span> <span class="nn">.</span> <span class="kn">import</span> <span class="n">_is_bearable</span>
 <span class="kn">from</span> <span class="nn">.dispatcher</span> <span class="kn">import</span> <span class="n">Dispatcher</span>
 <span class="kn">from</span> <span class="nn">.repr</span> <span class="kn">import</span> <span class="n">repr_short</span>
@@ -391,8 +390,7 @@ document.write(`
 
 
 <span class="k">class</span> <span class="nc">_ConversionCallable</span><span class="p">(</span><span class="n">Protocol</span><span class="p">[</span><span class="n">T</span><span class="p">,</span> <span class="n">R</span><span class="p">]):</span>
-    <span class="k">def</span> <span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">obj</span><span class="p">:</span> <span class="n">T</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">R</span><span class="p">:</span>
-        <span class="o">...</span>
+    <span class="k">def</span> <span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">obj</span><span class="p">:</span> <span class="n">T</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">R</span><span class="p">:</span> <span class="o">...</span>
 
 
 <div class="viewcode-block" id="add_conversion_method"><a class="viewcode-back" href="../../api.html#plum.promotion.add_conversion_method">[docs]</a><span class="k">def</span> <span class="nf">add_conversion_method</span><span class="p">(</span>
@@ -479,7 +477,10 @@ document.write(`
     <span class="k">def</span> <span class="nf">rule</span><span class="p">(</span><span class="n">t1</span><span class="p">:</span> <span class="n">type1</span><span class="p">,</span> <span class="n">t2</span><span class="p">:</span> <span class="n">type2</span><span class="p">):</span>
         <span class="k">return</span> <span class="n">type_to</span>
 
-    <span class="c1"># If the types are the same, the method will get overwritten.</span>
+    <span class="c1"># If the types are the same, we don&#39;t need to add the reverse rule. Resolve the</span>
+    <span class="c1"># types to handle the case where types are equal, but not identical.</span>
+    <span class="k">if</span> <span class="n">TypeHint</span><span class="p">(</span><span class="n">resolve_type_hint</span><span class="p">(</span><span class="n">type1</span><span class="p">))</span> <span class="o">==</span> <span class="n">TypeHint</span><span class="p">(</span><span class="n">resolve_type_hint</span><span class="p">(</span><span class="n">type2</span><span class="p">)):</span>
+        <span class="k">return</span>  <span class="c1"># Escape early.</span>
 
     <span class="nd">@_promotion_rule</span><span class="o">.</span><span class="n">dispatch</span>
     <span class="k">def</span> <span class="nf">rule</span><span class="p">(</span><span class="n">t1</span><span class="p">:</span> <span class="n">type2</span><span class="p">,</span> <span class="n">t2</span><span class="p">:</span> <span class="n">type1</span><span class="p">):</span>  <span class="c1"># noqa: F811</span>
