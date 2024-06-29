@@ -48,7 +48,6 @@ repos:
         exclude: |
           (?x)
           ^(
-              | plum/autoreload\.py
               | plum/alias\.py
               | plum/dispatcher\.py
               | plum/function\.py
