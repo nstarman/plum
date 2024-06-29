@@ -26,7 +26,7 @@ def _update_instances(old: type, new: type) -> None:
         type_mapping[k] = v
 
     # Since types have changed, clear the cache of everything.
-    clear_all_cache()  # type: ignore[no-untyped-call]
+    clear_all_cache()
 
 
 _update_instances_original = None

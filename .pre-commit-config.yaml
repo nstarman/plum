@@ -49,7 +49,6 @@ repos:
           (?x)
           ^(
               | plum/alias\.py
-              | plum/dispatcher\.py
               | plum/function\.py
               | plum/method\.py
               | plum/parametric\.py
