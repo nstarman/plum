@@ -274,6 +274,62 @@ def test_literal_dispatch_covers_subclasses(dispatch):
     assert f(MyInt(1)) == "one"
 
 
+def test_literal_dispatch_subclass_with_untrustworthy_equality(dispatch):
+    """A subclass may define a non-transitive `__eq__`, so its value cannot be keyed.
+
+    `W(1) == W(2)` is `True` with equal hashes, so value-keying puts them in the
+    same cache bucket — yet `W(1) == 1` and `W(2) != 1`, so they must dispatch
+    differently. Only identity is fine enough to key such an argument.
+    """
+
+    class W(int):
+        def __hash__(self):
+            return 0
+
+        def __eq__(self, other):
+            if type(other) is W:
+                return True
+            return int.__eq__(self, other)
+
+    @dispatch
+    def f(x: Literal[1]):
+        return "one"
+
+    @dispatch
+    def f(x: int):
+        return "int"
+
+    assert f(W(1)) == "one"
+    assert f(W(2)) == "int"
+    # And in the other warm-up order.
+    f.clear_cache()
+    assert f(W(2)) == "int"
+    assert f(W(1)) == "one"
+
+
+def test_literal_dispatch_uses_identity_for_subclasses(dispatch):
+    """End-to-end exercise of the `_Identity` fallback through actual dispatch."""
+    from plum._type import _Identity
+
+    class MyInt(int):
+        pass
+
+    @dispatch
+    def f(x: Literal[1]):
+        return "one"
+
+    @dispatch
+    def f(x: int):
+        return "int"
+
+    a, b = MyInt(1), MyInt(1)
+    assert f(a) == "one"
+    assert f(b) == "one"
+    # Two equal-but-distinct subclass instances get separate, identity-keyed entries.
+    assert len(f._cache) == 2
+    assert all(isinstance(k[0][-1], _Identity) for k in f._cache)
+
+
 def test_aspect_key_survives_clear_cache_with_reregister(dispatch):
     """`clear_cache(reregister=True)` installs a fresh, faithful resolver whose
     methods are only pending. The key callable used for the next call must be the

@@ -369,17 +369,29 @@ def _value(x: object, /) -> object | None:
 
     An `x` that is not an instance of any legal `Literal` type can never match any
     `Literal`, so `type(x)` alone determines the answer and the slot is `None` — this
-    is also what keeps unhashable arguments (a `list`, say) out of the key. A
-    *subclass* instance can match (`is_bearable(MyInt(1), Literal[1])` is `True`), so
-    its value must be captured; should such an instance be unhashable, fall back to
-    keying on its identity, which is finer than its value and so never collides.
+    is also what keeps unhashable arguments (a `list`, say) out of the key.
+
+    Only an `x` of one of those types *exactly* is keyed on its value. Such an `x`
+    has the built-in `__eq__` and `__hash__`, under which equal keys really do imply
+    equal `x == literal` for every literal. A *subclass* instance can also match
+    (`is_bearable(MyInt(1), Literal[1])` is `True`), but its `__eq__` and `__hash__`
+    are user code and may be non-transitive, so two arguments could share a key while
+    matching different literals. It is therefore keyed on its identity instead, which
+    is strictly finer than its value and so never collides. This is the same
+    precaution :class:`_Identity` already takes for classes.
+
+    Args:
+        x (object): Value.
+
+    Returns:
+        object or None: The value component of the cache key for `x`.
     """
     if type(x) in _LITERAL_TYPES:
         return x
     if isinstance(x, _LITERAL_BASES):
-        # Note: the identity fallback caches per object rather than per value. Only
-        # reachable for a subclass of a `Literal` type that killed its `__hash__`.
-        return x if _hashable(x) else _Identity(x)
+        # Note: this caches per object rather than per value. `Enum` members are
+        # singletons, so for them the two coincide.
+        return _Identity(x)
     return None
 
 
