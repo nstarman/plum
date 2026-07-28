@@ -117,6 +117,9 @@ class Function(metaclass=_FunctionMeta):
         self._resolved: list[
             tuple[Callable[..., Any], Signature | None, int | None]
         ] = []
+        # Mirror of `self._resolver._arg_key`, kept in sync whenever registrations
+        # are resolved. Mirrored to save an attribute hop on the dispatch hot path.
+        self._arg_key: Callable[[object], object] = type
 
     @property
     def owner(self) -> type | None:
@@ -328,6 +331,7 @@ class Function(metaclass=_FunctionMeta):
 
             if registered:
                 self._pending = []
+                self._arg_key = self._resolver._arg_key
 
                 # Clear cache. Reenters `self._lock`, which is why it is an `RLock`.
                 self.clear_cache(reregister=False)
@@ -443,7 +447,7 @@ class Function(metaclass=_FunctionMeta):
             # Attempt to use the cache based on the types of the arguments.
             # At this point, `args` must be a tuple (not `Signature` or `None`).
             assert isinstance(args, tuple)
-            types = tuple(map(self._resolver._arg_key, args))
+            types = tuple(map(self._arg_key, args))
         try:
             return self._cache[types]
         except KeyError:
