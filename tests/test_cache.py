@@ -310,6 +310,58 @@ def test_literal_and_type_dispatch_mixed(dispatch):
     assert len(f._cache) == 4
 
 
+def test_late_type_registration_invalidates_plain_type_keys(dispatch):
+    # The one path that could mix key shapes in a single dict: entries accumulated
+    # while the function was faithful are keyed on `type(x)`, but registering a
+    # `type[X]` method rebinds the key callable to the identity-aware one.
+    @dispatch
+    def f(x: object):
+        return "object"
+
+    f._resolve_pending_registrations()
+    assert f(int) == "object"
+    assert f(str) == "object"
+    # Faithful: both class arguments land in the same `(type,)` bucket.
+    assert set(f._cache) == {(type,)}
+
+    @dispatch
+    def f(x: type[int]):
+        return "type[int]"
+
+    # Registration is lazy, so resolving it is what invalidates the cache.
+    f._resolve_pending_registrations()
+    assert f._cache == {}
+
+    assert f(int) == "type[int]"
+    assert f(str) == "object"
+    # No stale `(type,)` key survives: every key is now `((type(x), identity),)`.
+    assert len(f._cache) == 2
+    assert all(len(k) == 1 and len(k[0]) == 2 for k in f._cache)
+
+
+def test_late_literal_registration_invalidates_plain_type_keys(dispatch):
+    @dispatch
+    def f(x: object):
+        return "object"
+
+    f._resolve_pending_registrations()
+    assert f(1) == "object"
+    assert f(2) == "object"
+    assert set(f._cache) == {(int,)}
+
+    @dispatch
+    def f(x: Literal[1]):
+        return "one"
+
+    f._resolve_pending_registrations()
+    assert f._cache == {}
+
+    assert f(1) == "one"
+    assert f(2) == "object"
+    assert len(f._cache) == 2
+    assert all(len(k) == 1 and len(k[0]) == 2 for k in f._cache)
+
+
 def test_type_dispatch_does_not_capture_a_value_slot(dispatch):
     from plum._type import Aspect
 

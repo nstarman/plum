@@ -757,14 +757,44 @@ def test_type_dispatch_pathological_metaclass(dispatch):
     assert f(B) == "object"
 
 
-def test_type_matches_only_classes_beartype_invariant():
-    # Pins the one external assumption behind cacheable `type[X]`: no non-class
-    # matches `type[T]`. If beartype changes this, cache_key soundness breaks.
+def test_type_match_implies_identity_slot_beartype_invariant():
+    # Pins the one external assumption behind cacheable `type[X]`: whenever `x`
+    # matches `type[X]`, the cache key's identity slot is non-`None`, so the key
+    # captures what the match depended on. If beartype ever matches an `x` that
+    # `_identity` maps to `None`, `cache_key` soundness breaks.
+    #
+    # Asserting instead that no non-class matches `type[T]` would be weaker (with
+    # `type[object]` beartype short-circuits to `isinstance(x, type)`, never reaching
+    # the `issubclass` half) and outright false for `LiesAboutClass` below.
     from plum._bear import is_bearable
+    from plum._type import _identity
 
-    non_classes = [5, list[int], tuple[int], (lambda: 0), int | str]
-    for x in non_classes:
-        assert is_bearable(x, type[object]) is False
+    class SomeClass:
+        pass
+
+    class LiesAboutClass:
+        @property
+        def __class__(self):
+            return type
+
+    liar = LiesAboutClass()
+    corpus = [5, list[int], tuple[int], (lambda: 0), int | str, int, SomeClass, liar]
+    matched = []
+    for x in corpus:
+        for hint in (type[object], type[int], type[SomeClass]):
+            try:
+                match = is_bearable(x, hint)
+            except TypeError:
+                # `issubclass` rejects `x`. Not a match, so nothing to capture.
+                continue
+            if match:
+                matched.append((x, hint))
+                assert _identity(x) is not None
+
+    # `isinstance` consults `__class__`, so the liar really does match `type[object]`.
+    assert (liar, type[object]) in matched
+    # And the corpus must not have degenerated into vacuous truth.
+    assert (int, type[int]) in matched
 
 
 def test_keyerror_from_method_body_propagates(dispatch):
