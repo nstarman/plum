@@ -87,7 +87,13 @@ class Signature(Comparable):
     _default_varargs: ClassVar = Missing
     _default_precedence: ClassVar[int] = 0
 
-    __slots__: tuple[str, ...] = ("types", "varargs", "precedence", "aspects")
+    __slots__: tuple[str, ...] = (
+        "types",
+        "varargs",
+        "precedence",
+        "aspects",
+        "_check",
+    )
 
     def __init__(
         self,
@@ -109,6 +115,10 @@ class Signature(Comparable):
 
         all_types = types if self.varargs is Missing else (*types, self.varargs)
         self.aspects: frozenset[Aspect] | None = _combine(all_types)
+        # Bind the matcher once, at construction, rather than reaching for it on
+        # every candidate check. It is `is_bearable` for every signature; binding it
+        # here is what lets a signature select a different one.
+        self._check: Callable[[object, TypeHint], bool] = is_bearable
 
     @staticmethod
     def from_callable(f: Callable[..., Any], precedence: int = 0) -> "Signature":
@@ -320,7 +330,8 @@ class Signature(Comparable):
             return False
         else:
             types = self.expand_varargs(len(values))
-            return all(is_bearable(v, t) for v, t in zip(values, types, strict=True))
+            check = self._check
+            return all(check(v, t) for v, t in zip(values, types, strict=True))
 
     def might_match(self, values: tuple[object, ...], /) -> bool:
         """Check whether *any* values with the runtime types of `values` could match.
@@ -368,8 +379,9 @@ class Signature(Comparable):
 
         # Additionally count one for every mismatching value above the
         # extra/missing arguments. There can be fewer types than values.
+        check = self._check
         for v, t in zip(values, types, strict=False):
-            if not is_bearable(v, t):
+            if not check(v, t):
                 distance += 1
 
         return distance
@@ -395,8 +407,9 @@ class Signature(Comparable):
         # there is an explicit mismatch.
         varargs_matched = True
 
+        check = self._check
         for i, (v, t) in enumerate(zip(values, types, strict=False)):
-            if not is_bearable(v, t):
+            if not check(v, t):
                 if i < n_types:
                     mismatches.add(i)
                 else:
