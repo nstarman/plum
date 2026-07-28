@@ -1,5 +1,7 @@
 from typing import Literal
 
+import pytest
+
 import plum
 from .util import benchmark
 
@@ -169,10 +171,12 @@ def test_cache_unfaithful(dispatch: plum.Dispatcher):
     def f(x: list[int]):
         return 2
 
-    # Since `f` is not faithful, no cache should be accumulated.
+    # Since `f` is not faithful, no method should be cached.
     assert f(1) == 1
     assert f([1]) == 2
     assert len(f._cache) == 0
+    # The methods to consider are cached instead, one bucket per argument type.
+    assert set(f._verify_cache) == {(int,), (list,)}
 
 
 def test_type_dispatch_is_cached(dispatch):
@@ -440,3 +444,83 @@ def test_verify_cache_clearing(dispatch: plum.Dispatcher):
 
     plum.clear_all_cache()
     assert len(f._verify_cache) == 0
+
+
+def test_verify_cache_preserves_ambiguity(dispatch):
+    @dispatch
+    def f(x: list[int], y: object):
+        return 1
+
+    @dispatch
+    def f(x: object, y: list[int]):
+        return 2
+
+    # Cold: nothing is cached yet.
+    with pytest.raises(plum.AmbiguousLookupError):
+        f([1], [1])
+    # The bucket is now warm, and the same call must still be ambiguous.
+    assert set(f._verify_cache) == {(list, list)}
+    with pytest.raises(plum.AmbiguousLookupError):
+        f([1], [1])
+
+    # Warming the very same bucket with an unambiguous call changes nothing.
+    assert f([1], ["a"]) == 1
+    with pytest.raises(plum.AmbiguousLookupError):
+        f([1], [1])
+
+
+def test_verify_cache_preserves_not_found(dispatch):
+    @dispatch
+    def f(x: list[int]):
+        return 1
+
+    @dispatch
+    def f(x: tuple[int, ...]):
+        return 2
+
+    for _ in range(2):  # Cold, then warm.
+        with pytest.raises(plum.NotFoundLookupError) as e:
+            f(["a"])
+        # The error reports all methods, not just the narrowed ones.
+        assert len(e.value.methods) == 2
+
+
+def test_verify_cache_preserves_precedence(dispatch):
+    @dispatch(precedence=1)
+    def f(x: list[int], y: object):
+        return 1
+
+    @dispatch
+    def f(x: object, y: list[int]):
+        return 2
+
+    # Ambiguous but for the precedence, cold and warm.
+    assert f([1], [1]) == 1
+    assert f([1], [1]) == 1
+
+
+def test_verify_cache_handles_varargs_and_arities(dispatch):
+    @dispatch
+    def f(x: int, *xs: list[int]):
+        return "varargs"
+
+    @dispatch
+    def f(x: int):
+        return "one"
+
+    @dispatch
+    def f(x: int, y: int):
+        return "two"
+
+    assert f(1) == "one"
+    assert f(1, 2) == "two"
+    assert f(1, [1]) == "varargs"
+    assert f(1, [1], [2]) == "varargs"
+    # A fixed-arity method is only ever in the bucket of its own arity. The varargs
+    # method can match any arity, but only for arguments its varargs type admits:
+    # it is in the `(int,)` bucket, where the varargs go unused, but not in the
+    # `(int, int)` one, where `2` can never be a `list[int]`.
+    assert len(f._verify_cache[(int,)]) == 2
+    assert len(f._verify_cache[(int, int)]) == 1
+    assert len(f._verify_cache[(int, list)]) == 1
+    assert len(f._verify_cache[(int, list, list)]) == 1
