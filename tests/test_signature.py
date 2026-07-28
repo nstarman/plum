@@ -452,3 +452,23 @@ def test_append_default_args():
     # Test that `itemgetter` is supported.
     f = operator.itemgetter(0)
     assert len(plum.append_default_args(Sig.from_callable(f), f)) == 1
+
+
+def test_signature_aspects_and_derived_flags():
+    # Faithful signature: empty aspects, is_faithful, is_cacheable.
+    s = Sig(int, int)
+    assert s.aspects == frozenset()
+    assert s.is_faithful and s.is_cacheable
+
+    # type[X] signature: non-empty aspects, cacheable but not faithful.
+    s = Sig(type[int], int)
+    assert s.aspects and not s.is_faithful and s.is_cacheable
+
+    # varargs participate.
+    assert Sig(int, varargs=type[int]).is_cacheable
+    assert not Sig(int, varargs=type[int]).is_faithful
+
+    # Uncacheable: aspects is None.
+    s = Sig(list[int])
+    assert s.aspects is None
+    assert not s.is_cacheable and not s.is_faithful

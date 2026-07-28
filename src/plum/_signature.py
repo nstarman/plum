@@ -16,7 +16,7 @@ from beartype.door import TypeHint as TypeHintWrapper
 from beartype.peps import resolve_pep563 as beartype_resolve_pep563
 
 from ._bear import is_bearable
-from ._type import is_faithful, resolve_type_hint
+from ._type import Aspect, _combine, resolve_type_hint
 from ._util import (
     Comparable,
     Missing,
@@ -45,13 +45,14 @@ class Signature(Comparable):
             arguments.
         has_varargs (bool): Whether `varargs` is not :class:`.util.Missing`.
         precedence (int): Precedence.
-        is_faithful (bool): Whether this signature only uses faithful types.
+        aspects (frozenset | None): The cache aspects this signature's types need, or
+            `None` if any type is uncacheable. See :func:`.type.is_cacheable`.
     """
 
     _default_varargs: ClassVar = Missing
     _default_precedence: ClassVar[int] = 0
 
-    __slots__: tuple[str, ...] = ("types", "varargs", "precedence", "is_faithful")
+    __slots__: tuple[str, ...] = ("types", "varargs", "precedence", "aspects")
 
     def __init__(
         self,
@@ -71,9 +72,8 @@ class Signature(Comparable):
         self.varargs = varargs
         self.precedence = precedence
 
-        types_are_faithful = all(is_faithful(t) for t in types)
-        varargs_are_faithful = self.varargs is Missing or is_faithful(self.varargs)
-        self.is_faithful = types_are_faithful and varargs_are_faithful
+        all_types = types if self.varargs is Missing else (*types, self.varargs)
+        self.aspects: frozenset[Aspect] | None = _combine(all_types)
 
     @staticmethod
     def from_callable(f: Callable[..., Any], precedence: int = 0) -> "Signature":
@@ -96,6 +96,16 @@ class Signature(Comparable):
     @property
     def has_varargs(self) -> bool:
         return self.varargs is not Missing
+
+    @property
+    def is_faithful(self) -> bool:
+        """Whether every type is faithful (the cache can key on `type(x)` alone)."""
+        return self.aspects == frozenset()
+
+    @property
+    def is_cacheable(self) -> bool:
+        """Whether dispatch on this signature can be cached."""
+        return self.aspects is not None
 
     def __copy__(self) -> Self:
         cls = type(self)
