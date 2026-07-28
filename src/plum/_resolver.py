@@ -440,6 +440,17 @@ class Resolver:
                 )
 
 
+_MAX_ORDERED_METHODS = 10
+"""Largest number of methods :func:`resolution_order` will attempt to order.
+
+Ordering costs a quadratic number of signature comparisons, and a comparison is
+not cheap. Ten bounds the extra work at a few hundred microseconds, paid once when
+the bucket is built and recovered within a couple of calls that hit it. Without a
+bound, a function with dozens of methods of one arity would pay milliseconds on a
+first call that may never be repeated. Larger buckets are left unordered; the
+caller still has its unique-match path for them."""
+
+
 def resolution_order(methods: Sequence[Method], /) -> list[Method] | None:
     """Order `methods` so that the first one that matches is the one that
     :meth:`Resolver.resolve` selects, or return :obj:`None` if no such order exists.
@@ -489,6 +500,8 @@ def resolution_order(methods: Sequence[Method], /) -> list[Method] | None:
             :obj:`None` if returning the first match would not be sound.
     """
     n = len(methods)
+    if n > _MAX_ORDERED_METHODS:
+        return None
     signatures = [m.signature for m in methods]
     # `le[i][j]` is whether `signatures[i]` is at least as specific as
     # `signatures[j]`. Computing it once keeps this to `n * (n - 1)` comparisons,

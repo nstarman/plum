@@ -806,6 +806,37 @@ def test_verify_cache_orders_equally_specific_methods_by_registration(dispatch):
     assert f._resolver.resolve(([1],)).implementation([1]) == "second"
 
 
+def test_verify_cache_leaves_a_large_bucket_unordered(dispatch):
+    hints = [
+        list[int],
+        list[str],
+        list[bool],
+        list[float],
+        list[bytes],
+        list[complex],
+        list[frozenset],
+        list[tuple],
+        list[dict],
+        list[set],
+        list[object],
+    ]
+    f = None
+    for i, hint in enumerate(hints):
+
+        def impl(x, _i=i):
+            return _i
+
+        impl.__name__ = "big"
+        f = dispatch.multi(plum.Signature(hint))(impl)
+
+    # Ordering is quadratic in the size of the bucket, so a large one is left to the
+    # unique-match path, which resolves it exactly as full resolution does.
+    assert len(f.methods) > 10
+    assert f([1]) == 0
+    assert not f._verify_cache[(list,)][2]
+    assert f(["a"]) == 1
+
+
 def test_verify_cache_first_match_preserves_the_mro_fallback():
     # `["a"]` lands in the same bucket as `[1]` but matches nothing in it, so the
     # first-match path has to fall through to the walk up the MRO.
