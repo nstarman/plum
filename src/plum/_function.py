@@ -585,7 +585,7 @@ class Function:
         # method — and raises exactly the same errors — as over all methods. Nothing
         # is ever stored in `self._cache` for such a resolver, so skipping it here
         # only skips a lookup that must miss.
-        if self._resolver.aspects is None and isinstance(args, tuple):
+        if not self._resolver.is_cacheable and isinstance(args, tuple):
             try:
                 methods = self._verify_cache[types]
             except KeyError:
