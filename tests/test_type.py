@@ -362,8 +362,9 @@ def test_cache_key_survives_pathological_metaclasses():
 def test_public_api_exports():
     import plum
 
-    assert plum.is_cacheable is not None
-    assert plum.cache_key is not None
+    assert plum.is_cacheable(int) is True
+    assert plum.is_cacheable(list[int]) is False
+    assert plum.cache_key(1)[0] is int
     assert "is_cacheable" in plum.__all__
     assert "cache_key" in plum.__all__
 

@@ -341,7 +341,7 @@ class _Identity:
         return type(other) is _Identity and self.obj is other.obj
 
 
-def identity(x: object, /) -> object | None:
+def _identity(x: object, /) -> object | None:
     """The identity component of `cache_key` for `x`.
 
     `None` for non-classes. For a class, the class itself when its metaclass is plain
@@ -360,7 +360,7 @@ _LITERAL_BASES: tuple[type, ...] = (int, str, bytes, enum.Enum)
 """Bases of those types. `bool` and `NoneType` cannot be subclassed."""
 
 
-def value(x: object, /) -> object | None:
+def _value(x: object, /) -> object | None:
     """The value component of `cache_key` for `x`.
 
     Beartype matches `x` against `Literal[v]` exactly when `isinstance(x, type(v))`
@@ -406,17 +406,17 @@ def cache_key(
     """
     key: tuple[object, ...] = (type(x),)
     if Aspect.IDENTITY in aspects:
-        key += (identity(x),)
+        key += (_identity(x),)
     if Aspect.VALUE in aspects:
-        key += (value(x),)
+        key += (_value(x),)
     return key
 
 
 _ARG_KEYS: "dict[frozenset[Aspect], Callable[[object], object]]" = {
     _NO_ASPECTS: type,
-    _IDENTITY: lambda x: (type(x), identity(x)),
-    _VALUE: lambda x: (type(x), value(x)),
-    _IDENTITY | _VALUE: lambda x: (type(x), identity(x), value(x)),
+    _IDENTITY: lambda x: (type(x), _identity(x)),
+    _VALUE: lambda x: (type(x), _value(x)),
+    _IDENTITY | _VALUE: lambda x: (type(x), _identity(x), _value(x)),
 }
 """`cache_key` specialised to each combination of aspects, for :class:`.Resolver` to
 bind on the hot path. Testing `Aspect` membership per call costs ~80 ns per aspect
