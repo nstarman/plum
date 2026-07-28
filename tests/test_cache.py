@@ -374,3 +374,33 @@ def test_type_dispatch_does_not_capture_a_value_slot(dispatch):
     assert g(int) == "type[int]"
     # `(type(x), identity(x))`: no value slot for a `type[X]`-only resolver.
     assert all(len(k) == 1 and len(k[0]) == 2 for k in g._cache)
+
+
+# The verify cache: an uncacheable function cannot memoise a method, but it can
+# memoise which methods are worth considering for given bare argument types.
+
+
+def test_verify_cache_narrows_the_methods_considered(dispatch):
+    @dispatch
+    def f(x: list[int]):
+        return "list[int]"
+
+    @dispatch
+    def f(x: list[str]):
+        return "list[str]"
+
+    @dispatch
+    def f(x: int):
+        return "int"
+
+    assert f([1]) == "list[int]"
+    assert f(["a"]) == "list[str]"
+    assert f(1) == "int"
+
+    # Uncacheable, so no method is memoised.
+    assert len(f._cache) == 0
+    # But the methods that could possibly match are, bucketed by bare types.
+    assert set(f._verify_cache) == {(list,), (int,)}
+    # A `list` argument can never match `int`, and vice versa.
+    assert len(f._verify_cache[(list,)]) == 2
+    assert len(f._verify_cache[(int,)]) == 1

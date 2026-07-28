@@ -88,6 +88,12 @@ class Function(metaclass=_FunctionMeta):
         # each element is a `TypeHint`.
         self._cache: dict[tuple[TypeHint, ...], tuple[Callable[..., Any], TypeHint]]
         self._cache = {}
+        # Verify cache, used only when the resolver is uncacheable. It maps the bare
+        # runtime types of the arguments to the methods that arguments with those
+        # types could possibly match, which is all a `type(x)` key can settle. The
+        # methods still have to be verified against the actual arguments, hence the
+        # name; see `_resolve_method_with_cache`.
+        self._verify_cache: dict[tuple[TypeHint, ...], MethodList] = {}
 
         # Guards the lazy resolution of pending registrations, which mutates each
         # registered function's `__annotations__` in place (via beartype's
@@ -339,12 +345,16 @@ class Function(metaclass=_FunctionMeta):
                 self.clear_cache(reregister=False)
 
     def resolve_method(
-        self, target: tuple[object, ...] | Signature
+        self,
+        target: tuple[object, ...] | Signature,
+        methods: MethodList | None = None,
     ) -> tuple[Callable[..., Any], TypeHint]:
         """Find the method and return type for arguments.
 
         Args:
             target (object): Target.
+            methods (:class:`.method.MethodList`, optional): Narrowed list of methods
+                to consider. See :meth:`.resolver.Resolver.resolve`.
 
         Returns:
             `tuple[function, type]`:
@@ -355,7 +365,7 @@ class Function(metaclass=_FunctionMeta):
 
         try:
             # Attempt to find the method using the resolver.
-            method = self._resolver.resolve(target)
+            method = self._resolver.resolve(target, methods)
             impl = method.implementation
             return_type = method.return_type
 
@@ -435,7 +445,9 @@ class Function(metaclass=_FunctionMeta):
         try:
             method, return_type = self._cache[key]
         except KeyError:
-            method, return_type = self._resolve_method_with_cache(args=args)
+            # Hand over the key that was just computed: recomputing it can run user
+            # code a second time, and an uncacheable function misses every call.
+            method, return_type = self._resolve_method_with_cache(args=args, types=key)
         return _convert(method(*args, **kw), return_type)
 
     def _resolve_method_with_cache(
@@ -464,6 +476,24 @@ class Function(metaclass=_FunctionMeta):
             # At this point, `args` must be a tuple (not `Signature` or `None`).
             assert isinstance(args, tuple)
             types = tuple(map(self._arg_key, args))
+
+        # Tier two. An uncacheable resolver cannot memoise a method, because no
+        # bounded key determines which method matches. What it can memoise is which
+        # methods are worth *considering*: the ones that arguments with these bare
+        # runtime types could possibly match. Resolution then runs over that list,
+        # which contains every method that can match, so it selects exactly the same
+        # method — and raises exactly the same errors — as over all methods. Nothing
+        # is ever stored in `self._cache` for such a resolver, so skipping it here
+        # only skips a lookup that must miss.
+        if self._resolver.aspects is None and isinstance(args, tuple):
+            try:
+                methods = self._verify_cache[types]
+            except KeyError:
+                methods = self._verify_cache[types] = MethodList(
+                    m for m in self._resolver.methods if m.signature.might_match(args)
+                )
+            return self.resolve_method(args, methods)
+
         try:
             return self._cache[types]
         except KeyError:
