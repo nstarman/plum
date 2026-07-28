@@ -357,9 +357,10 @@ def test_late_type_registration_invalidates_plain_type_keys(dispatch):
 
     assert f(int) == "type[int]"
     assert f(str) == "object"
-    # No stale `(type,)` key survives: every key is now `((type(x), identity),)`.
-    assert len(f._cache) == 2
-    assert all(len(k) == 1 and len(k[0]) == 2 for k in f._cache)
+    # No stale `(type,)` key survives, and the two classes — which dispatch
+    # differently — no longer share a key.
+    assert (type,) not in f._cache
+    assert len(set(f._cache)) == 2
 
 
 def test_late_literal_registration_invalidates_plain_type_keys(dispatch):
@@ -381,8 +382,10 @@ def test_late_literal_registration_invalidates_plain_type_keys(dispatch):
 
     assert f(1) == "one"
     assert f(2) == "object"
-    assert len(f._cache) == 2
-    assert all(len(k) == 1 and len(k[0]) == 2 for k in f._cache)
+    # No stale `(int,)` key survives, and the two values — which dispatch
+    # differently — no longer share a key.
+    assert (int,) not in f._cache
+    assert len(set(f._cache)) == 2
 
 
 def test_type_dispatch_does_not_capture_a_value_slot(dispatch):
@@ -395,8 +398,11 @@ def test_type_dispatch_does_not_capture_a_value_slot(dispatch):
     g._resolve_pending_registrations()
     assert g._resolver.aspects == {Aspect.IDENTITY}
     assert g(int) == "type[int]"
-    # `(type(x), identity(x))`: no value slot for a `type[X]`-only resolver.
-    assert all(len(k) == 1 and len(k[0]) == 2 for k in g._cache)
+    # No value slot for a `type[X]`-only resolver: distinct values of the same
+    # non-class type are indistinguishable to its key.
+    assert g._resolver._arg_key(1) == g._resolver._arg_key(2)
+    # Classes still are, since that is the aspect it does ask for.
+    assert g._resolver._arg_key(int) != g._resolver._arg_key(str)
 
 
 def test_empty_tuple_hint_dispatch_tier_one(dispatch):

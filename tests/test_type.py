@@ -236,7 +236,8 @@ def test_is_faithful():
 
     # Test warning.
     with pytest.warns(
-        Warning, match=r"(?i)could not determine whether `(.*)` is cacheable or not"
+        Warning,
+        match=r"(?i)could not determine whether `(.*)` is faithful or cacheable",
     ):
         assert not is_faithful(1)
 
@@ -338,13 +339,23 @@ def test_empty_tuple_hint_is_not_faithful():
     assert is_faithful(typing.Any)
 
 
-def test_cache_key_shape():
+def test_cache_key_contract():
+    """Equal keys imply the same match result, so anything that dispatches
+    differently must get a distinct key. The width and order of the slots are an
+    implementation detail and deliberately not asserted here.
+    """
+
     class SomeClass:
         pass
 
-    # Non-classes keyed on their type and value.
-    assert cache_key(1) == (int, None, 1)
-    assert cache_key("x") == (str, None, "x")
+    # Values that a `Literal` tells apart get distinct keys.
+    assert cache_key(1) == cache_key(1)
+    assert cache_key(1) != cache_key(2)
+    assert cache_key("x") != cache_key("y")
+    # `True == 1`, but `Literal[1]` matches only one of them.
+    assert cache_key(True) != cache_key(1)
+    # Same value, different type.
+    assert cache_key(1) != cache_key(1.0)
     # Classes keyed on identity; distinct from a same-type instance key.
     assert cache_key(int) == cache_key(int)
     assert cache_key(int) != cache_key(str)

@@ -88,7 +88,7 @@ system, which is *invariant*.
 For example, this means that `list[T1]` is a subtype of `list[T2]` whenever
 `T1` is a subtype of `T2`.
 
-## Performance and Faithful Types
+## Performance and Cacheable Types
 
 Plum achieves performance by caching the dispatch process.
 Unfortunately, efficient caching is not always possible.
@@ -156,8 +156,6 @@ Both caches are cleared by `f.clear_cache()` and `clear_all_cache()`.
 Example:
 
 ```python
-from typing import Literal
-
 from plum import dispatch
 
 
@@ -173,16 +171,18 @@ def add_5_uncacheable(x: list[int]):
 
 ```python
 >>> %timeit add_5_cacheable(1)  # doctest:+SKIP
-585 ns ± 6.2 ns per loop (mean ± std. dev. of 7 runs, 1,000,000 loops each)
+374 ns ± 0.7 ns per loop (mean ± std. dev. of 7 runs, 300,000 loops each)
 
 >>> %timeit add_5_uncacheable([1])  # doctest:+SKIP
-6.24 µs ± 68.9 ns per loop (mean ± std. dev. of 7 runs, 100,000 loops each)
+2.95 µs ± 18.4 ns per loop (mean ± std. dev. of 7 runs, 100,000 loops each)
 ```
 
 Plum implements `is_faithful`, which is a function that attempts to establish whether
 a type is faithful or not:
 
 ```python
+>>> from typing import Literal
+
 >>> from plum import is_faithful, is_cacheable
 
 >>> is_faithful(int)

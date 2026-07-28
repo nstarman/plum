@@ -13,7 +13,7 @@ import enum
 import sys
 import typing
 import warnings
-from collections.abc import Callable, Hashable
+from collections.abc import Callable, Hashable, Iterable
 from functools import reduce
 from operator import or_
 from types import UnionType
@@ -440,6 +440,12 @@ def is_faithful(x: object, /) -> bool:
 
     `type[X]` is *not* faithful (its match depends on class identity); see
     :func:`is_cacheable`.
+
+    Args:
+        x (type or type hint): Type hint.
+
+    Returns:
+        bool: Whether `x` is faithful or not.
     """
     return _aspects(resolve_type_hint(x)) == _NO_ASPECTS
 
@@ -452,11 +458,17 @@ def is_cacheable(x: object, /) -> bool:
     addition `type[X]` is cacheable but not faithful (its match `issubclass(x, X)`
     depends on the class identity of `x`, which `cache_key` captures), and so is
     `Literal[...]` (its match depends on the value of `x`, likewise captured).
+
+    Args:
+        x (type or type hint): Type hint.
+
+    Returns:
+        bool: Whether `x` is cacheable or not.
     """
     return _aspects(resolve_type_hint(x)) is not None
 
 
-def _combine(items: "typing.Iterable[object]", /) -> "frozenset[Aspect] | None":
+def _combine(items: "Iterable[object]", /) -> "frozenset[Aspect] | None":
     """Union the aspects of `items` (each resolved); `None` if any is uncacheable."""
     acc = _NO_ASPECTS
     for item in items:
@@ -517,8 +529,8 @@ def _aspects(x: object, /) -> "frozenset[Aspect] | None":
 
     else:
         warnings.warn(
-            f"Could not determine whether `{x}` is cacheable or not. "
-            f"I have concluded that it is not cacheable, so your code might run "
+            f"Could not determine whether `{x}` is faithful or cacheable. "
+            f"I have concluded that it is neither, so your code might run "
             f"with subpar performance. "
             f"Please open an issue at https://github.com/beartype/plum.",
             stacklevel=2,
