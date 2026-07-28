@@ -294,15 +294,17 @@ class Aspect(enum.Enum):
 
     Faithful types need none of these (`type(x)` suffices). Each member names an
     extra thing `cache_key` must encode so that a category of non-faithful types
-    becomes cacheable. `IDENTITY` supports `type[X]`. Future members (e.g. a value
-    aspect for `Literal`) are additive.
+    becomes cacheable. `IDENTITY` supports `type[X]` and `VALUE` supports
+    `Literal[...]`. Further members are additive.
     """
 
     IDENTITY = "identity"
+    VALUE = "value"
 
 
 _NO_ASPECTS: "frozenset[Aspect]" = frozenset()
 _IDENTITY: "frozenset[Aspect]" = frozenset({Aspect.IDENTITY})
+_VALUE: "frozenset[Aspect]" = frozenset({Aspect.VALUE})
 _ALL_ASPECTS: "frozenset[Aspect]" = frozenset(Aspect)
 
 
@@ -315,26 +317,28 @@ def _has_dunder_faithful(x: type, /) -> TypeGuard[_SupportsDunderFaithful]:
     return hasattr(x, "__faithful__")
 
 
-class _TypeIdentity:
-    """Identity cache-key wrapper for a class value.
+class _Identity:
+    """Identity cache-key wrapper for an object whose hash or equality cannot be
+    trusted.
 
     A class cannot be used as a cache key directly: its hash and equality come from
     its metaclass, so a metaclass with a custom `__eq__` would make distinct classes
     collide (silent wrong hit) and one whose classes are unhashable would make the
-    key raise `TypeError`. This wrapper keys on `id`, sidestepping the metaclass, and
-    holds a reference to `cls` so its `id` is not reused while the entry lives.
+    key raise `TypeError`. The same applies to an unhashable value. This wrapper keys
+    on `id`, sidestepping both, and holds a reference to `obj` so its `id` is not
+    reused while the entry lives.
     """
 
-    __slots__ = ("cls",)
+    __slots__ = ("obj",)
 
-    def __init__(self, cls: type, /) -> None:
-        self.cls = cls
+    def __init__(self, obj: object, /) -> None:
+        self.obj = obj
 
     def __hash__(self) -> int:
-        return id(self.cls)
+        return id(self.obj)
 
     def __eq__(self, other: object, /) -> bool:
-        return type(other) is _TypeIdentity and self.cls is other.cls
+        return type(other) is _Identity and self.obj is other.obj
 
 
 def identity(x: object, /) -> object | None:
@@ -342,11 +346,41 @@ def identity(x: object, /) -> object | None:
 
     `None` for non-classes. For a class, the class itself when its metaclass is plain
     `type` (whose hash is id-based and equality is identity — already safe and fast),
-    otherwise the metaclass-safe `_TypeIdentity` wrapper.
+    otherwise the metaclass-safe `_Identity` wrapper.
     """
     if not isinstance(x, type):
         return None
-    return x if type(x) is type else _TypeIdentity(x)
+    return x if type(x) is type else _Identity(x)
+
+
+_LITERAL_TYPES: frozenset[type] = frozenset({bool, int, str, bytes, type(None)})
+"""The types a `Literal` argument may legally have, exactly."""
+
+_LITERAL_BASES: tuple[type, ...] = (int, str, bytes, enum.Enum)
+"""Bases of those types. `bool` and `NoneType` cannot be subclassed."""
+
+
+def value(x: object, /) -> object | None:
+    """The value component of `cache_key` for `x`.
+
+    Beartype matches `x` against `Literal[v]` exactly when `isinstance(x, type(v))`
+    and `x == v`. The first half is settled by `type(x)`, which the key already
+    carries; this slot settles the second half.
+
+    An `x` that is not an instance of any legal `Literal` type can never match any
+    `Literal`, so `type(x)` alone determines the answer and the slot is `None` — this
+    is also what keeps unhashable arguments (a `list`, say) out of the key. A
+    *subclass* instance can match (`is_bearable(MyInt(1), Literal[1])` is `True`), so
+    its value must be captured; should such an instance be unhashable, fall back to
+    keying on its identity, which is finer than its value and so never collides.
+    """
+    if type(x) in _LITERAL_TYPES:
+        return x
+    if isinstance(x, _LITERAL_BASES):
+        # Note: the identity fallback caches per object rather than per value. Only
+        # reachable for a subclass of a `Literal` type that killed its `__hash__`.
+        return x if _hashable(x) else _Identity(x)
+    return None
 
 
 def cache_key(
@@ -362,6 +396,8 @@ def cache_key(
     key: tuple[object, ...] = (type(x),)
     if Aspect.IDENTITY in aspects:
         key += (identity(x),)
+    if Aspect.VALUE in aspects:
+        key += (value(x),)
     return key
 
 
@@ -390,7 +426,8 @@ def is_cacheable(x: object, /) -> bool:
     `t` is _cacheable_ if, for all `x`, whether `x` matches `t` is a function of
     :func:`cache_key(x) <cache_key>` alone. Every faithful type is cacheable; in
     addition `type[X]` is cacheable but not faithful (its match `issubclass(x, X)`
-    depends on the class identity of `x`, which `cache_key` captures).
+    depends on the class identity of `x`, which `cache_key` captures), and so is
+    `Literal[...]` (its match depends on the value of `x`, likewise captured).
     """
     return _aspects(resolve_type_hint(x)) is not None
 
@@ -409,7 +446,8 @@ def _combine(items: "typing.Iterable[object]", /) -> "frozenset[Aspect] | None":
 def _aspects(x: object, /) -> "frozenset[Aspect] | None":
     """Classify a **resolved** hint into the cache aspects it needs, or `None`.
 
-    `frozenset()` = faithful (type-key suffices); `{IDENTITY}` = `type[X]`; a union is
+    `frozenset()` = faithful (type-key suffices); `{IDENTITY}` = `type[X]`;
+    `{VALUE}` = `Literal[...]`; a union is
     the union of its members (`None` if any member is uncacheable); everything else
     that is not a plainly faithful type is `None` (uncacheable). This is the single
     classifier `is_faithful` and `is_cacheable` derive from.
@@ -423,6 +461,9 @@ def _aspects(x: object, /) -> "frozenset[Aspect] | None":
         if origin is type:
             # `type[X]`: cacheable via the identity component of the cache key.
             return _IDENTITY
+        if origin is Literal:
+            # `Literal[...]`: cacheable via the value component of the cache key.
+            return _VALUE
         if origin in UNION_TYPES:
             return _combine(args)
         return None

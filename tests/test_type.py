@@ -1,11 +1,14 @@
 import abc
+import enum
 import sys
 import typing
 from typing import Literal
 
 import pytest
 
+from plum._bear import is_bearable
 from plum._type import (
+    Aspect,
     ModuleType,
     PromisedType,
     ResolvableType,
@@ -302,8 +305,11 @@ def test_is_cacheable_and_faithful_split():
     assert is_cacheable(typing.Type[int])  # noqa: UP006
     assert is_cacheable(typing.Union[type[int], str])  # noqa: UP007
 
+    # Literal: cacheable but NOT faithful.
+    assert not is_faithful(typing.Literal[1])
+    assert is_cacheable(typing.Literal[1])
+
     # Genuinely uncacheable.
-    assert not is_cacheable(typing.Literal[1])
     assert not is_cacheable(list[int])
     assert not is_cacheable(list[type[int]])
 
@@ -312,9 +318,9 @@ def test_cache_key_shape():
     class SomeClass:
         pass
 
-    # Non-classes keyed on their type.
-    assert cache_key(1) == (int, None)
-    assert cache_key("x") == (str, None)
+    # Non-classes keyed on their type and value.
+    assert cache_key(1) == (int, None, 1)
+    assert cache_key("x") == (str, None, "x")
     # Classes keyed on identity; distinct from a same-type instance key.
     assert cache_key(int) == cache_key(int)
     assert cache_key(int) != cache_key(str)
@@ -359,3 +365,81 @@ def test_public_api_exports():
     assert plum.cache_key is not None
     assert "is_cacheable" in plum.__all__
     assert "cache_key" in plum.__all__
+
+
+def test_is_cacheable_literal():
+    """`Literal` is cacheable (via the value aspect) but not faithful."""
+    assert not is_faithful(Literal[1])
+    assert is_cacheable(Literal[1])
+    assert is_cacheable(Literal[1, 2])
+    assert is_cacheable(Literal["a", None])
+    # Unions and containers combine as usual.
+    assert is_cacheable(typing.Union[Literal[1], str])  # noqa: UP007
+    assert is_cacheable(typing.Union[Literal[1], type[int]])  # noqa: UP007
+    assert not is_cacheable(list[Literal[1]])
+
+
+def test_cache_key_value_aspect_is_opt_in():
+    """Only a resolver that asks for `VALUE` pays for the value slot."""
+    identity_only = frozenset({Aspect.IDENTITY})
+    value_only = frozenset({Aspect.VALUE})
+
+    # A `type[X]`-only resolver's key is unchanged: `(type(x), identity(x))`.
+    assert cache_key(1, aspects=identity_only) == (int, None)
+    assert len(cache_key(int, aspects=identity_only)) == 2
+
+    # A `Literal`-only resolver captures the value and nothing else.
+    assert cache_key(1, aspects=value_only) == (int, 1)
+    assert cache_key(2, aspects=value_only) == (int, 2)
+    assert cache_key(1, aspects=value_only) != cache_key(2, aspects=value_only)
+    # `True` and `1` are equal but not interchangeable for `Literal`: the type slot
+    # keeps them apart.
+    assert cache_key(True, aspects=value_only) != cache_key(1, aspects=value_only)
+    # A value that can never match any `Literal` gets an empty slot.
+    assert cache_key(1.5, aspects=value_only) == (float, None)
+    assert cache_key([1], aspects=value_only) == (list, None)
+
+
+def test_cache_key_value_covers_literal_matching_subclasses():
+    """Subclass instances match `Literal`s, so their value must be captured."""
+    value_only = frozenset({Aspect.VALUE})
+
+    class MyInt(int):
+        pass
+
+    assert is_bearable(MyInt(1), Literal[1])
+    assert not is_bearable(MyInt(2), Literal[1])
+    assert cache_key(MyInt(1), aspects=value_only) != cache_key(
+        MyInt(2), aspects=value_only
+    )
+
+    class MyEnum(enum.IntEnum):
+        A = 1
+        B = 2
+
+    assert is_bearable(MyEnum.A, Literal[1])
+    assert cache_key(MyEnum.A, aspects=value_only) != cache_key(
+        MyEnum.B, aspects=value_only
+    )
+
+
+def test_cache_key_value_survives_unhashable_values():
+    """An unhashable argument must not make the key raise."""
+    value_only = frozenset({Aspect.VALUE})
+
+    class Unhashable(str):
+        def __eq__(self, other):
+            return str(self) == str(other)
+
+        __hash__ = None  # type: ignore[assignment]
+
+    a, b = Unhashable("a"), Unhashable("b")
+    assert is_bearable(a, Literal["a"])
+    assert not is_bearable(b, Literal["a"])
+
+    d = {cache_key(a, aspects=value_only): 1, cache_key(b, aspects=value_only): 2}
+    assert len(d) == 2
+    assert d[cache_key(a, aspects=value_only)] == 1
+
+    # Plain unhashable values are fine too.
+    hash(cache_key([1], aspects=value_only))
