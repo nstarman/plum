@@ -428,14 +428,12 @@ class Function(metaclass=_FunctionMeta):
         # `register` leaves stale entries until the registrations are resolved. Only
         # the lookup is inside the `try`: building the key can run user code (a
         # metaclass `__hash__`, say) and the dispatched method can raise, and neither
-        # `KeyError` may be swallowed and silently retried. The key is parked in the
-        # `method` slot rather than a local of its own: an extra local costs ~7 ns
-        # here, about 2% of a cached call.
+        # `KeyError` may be swallowed and silently retried.
         if self._pending:
             self._resolve_pending_registrations()
-        method: Any = tuple(map(self._arg_key, args))
+        key = tuple(map(self._arg_key, args))
         try:
-            method, return_type = self._cache[method]
+            method, return_type = self._cache[key]
         except KeyError:
             method, return_type = self._resolve_method_with_cache(args=args)
         return _convert(method(*args, **kw), return_type)
