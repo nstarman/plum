@@ -355,17 +355,20 @@ class Aspect(enum.Enum):
 
     Faithful types need none of these (`type(x)` suffices). Each member names an
     extra thing `cache_key` must encode so that a category of non-faithful types
-    becomes cacheable. `IDENTITY` supports `type[X]` and `VALUE` supports
-    `Literal[...]`. Further members are additive.
+    becomes cacheable. `IDENTITY` supports `type[X]`, `VALUE` supports
+    `Literal[...]` and `GENERIC` supports a parametrised user generic such as
+    `Box[int]`. Further members are additive.
     """
 
     IDENTITY = "identity"
     VALUE = "value"
+    GENERIC = "generic"
 
 
 _NO_ASPECTS: "frozenset[Aspect]" = frozenset()
 _IDENTITY: "frozenset[Aspect]" = frozenset({Aspect.IDENTITY})
 _VALUE: "frozenset[Aspect]" = frozenset({Aspect.VALUE})
+_GENERIC: "frozenset[Aspect]" = frozenset({Aspect.GENERIC})
 _ALL_ASPECTS: "frozenset[Aspect]" = frozenset(Aspect)
 
 
@@ -456,6 +459,28 @@ def _value(x: object, /) -> object | None:
     return None
 
 
+def _generic(x: object, /) -> object | None:
+    """The generic component of `cache_key` for `x`.
+
+    A parametrised user generic is matched by :func:`._bear.is_bearable_with_orig`,
+    which decides on `__orig_class__` — the parametrisation Python records on the
+    instance — and falls back to `type(x)` when there is none. This slot is exactly
+    that record, so the pair `(type(x), __orig_class__)` settles the match: two
+    values sharing it are decided identically.
+
+    `None` for a value that records no parametrisation, which is also the fallback
+    the matcher itself uses. As elsewhere in plum, `__orig_class__` is trusted to be
+    the type it claims: Python sets it, and so does :func:`plum.parametric`.
+
+    Args:
+        x (object): Value.
+
+    Returns:
+        object or None: The generic component of the cache key for `x`.
+    """
+    return getattr(x, "__orig_class__", None)
+
+
 def cache_key(
     x: object, /, aspects: "frozenset[Aspect]" = _ALL_ASPECTS
 ) -> tuple[object, ...]:
@@ -470,7 +495,8 @@ def cache_key(
     implementation detail: every aspect added to :class:`Aspect` adds a slot to the
     default key. Only the contract is stable: equal keys imply the same match result.
 
-    Note that the identity and value slots keep a strong reference to `x` — necessarily,
+    Note that the identity, value and generic slots keep a strong reference to `x`
+    or to a type derived from it — necessarily,
     since that is what makes `id`-based hashing safe. A function dispatching on
     `type[X]` or `Literal` therefore accumulates one cache entry per distinct argument
     class or value, and pins that class or value, for the function's lifetime;
@@ -493,6 +519,8 @@ def cache_key(
         key += (_identity(x),)
     if Aspect.VALUE in aspects:
         key += (_value(x),)
+    if Aspect.GENERIC in aspects:
+        key += (_generic(x),)
     return key
 
 
@@ -500,7 +528,16 @@ _ARG_KEYS: "dict[frozenset[Aspect], Callable[[object], object]]" = {
     _NO_ASPECTS: type,
     _IDENTITY: lambda x: (type(x), _identity(x)),
     _VALUE: lambda x: (type(x), _value(x)),
+    _GENERIC: lambda x: (type(x), _generic(x)),
     _IDENTITY | _VALUE: lambda x: (type(x), _identity(x), _value(x)),
+    _IDENTITY | _GENERIC: lambda x: (type(x), _identity(x), _generic(x)),
+    _VALUE | _GENERIC: lambda x: (type(x), _value(x), _generic(x)),
+    _IDENTITY | _VALUE | _GENERIC: lambda x: (
+        type(x),
+        _identity(x),
+        _value(x),
+        _generic(x),
+    ),
 }
 """`cache_key` specialised to each combination of aspects, for :class:`.Resolver` to
 bind on the hot path. Testing `Aspect` membership per call costs ~80 ns per aspect
@@ -540,8 +577,13 @@ def is_cacheable(x: object, /) -> bool:
     `t` is _cacheable_ if, for all `x`, whether `x` matches `t` is a function of
     :func:`cache_key(x) <cache_key>` alone. Every faithful type is cacheable; in
     addition `type[X]` is cacheable but not faithful (its match `issubclass(x, X)`
-    depends on the class identity of `x`, which `cache_key` captures), and so is
-    `Literal[...]` (its match depends on the value of `x`, likewise captured).
+    depends on the class identity of `x`, which `cache_key` captures), and so are
+    `Literal[...]` (its match depends on the value of `x`, likewise captured) and a
+    parametrised user generic such as `Box[int]` (its match depends on the `x`'s
+    `__orig_class__`, likewise captured).
+
+    A parametrised *builtin* such as `list[int]` is not cacheable: matching it
+    inspects the elements, so two values of the same type can match differently.
 
     Args:
         x (type or type hint): Type hint.
@@ -567,7 +609,7 @@ def _aspects(x: object, /) -> "frozenset[Aspect] | None":
     """Classify a **resolved** hint into the cache aspects it needs, or `None`.
 
     `frozenset()` = faithful (type-key suffices); `{IDENTITY}` = `type[X]`;
-    `{VALUE}` = `Literal[...]`; a union is
+    `{VALUE}` = `Literal[...]`; `{GENERIC}` = a parametrised user generic; a union is
     the union of its members (`None` if any member is uncacheable); everything else
     that is not a plainly faithful type is `None` (uncacheable). This is the single
     classifier `is_faithful` and `is_cacheable` derive from.
@@ -612,11 +654,19 @@ def _aspects(x: object, /) -> "frozenset[Aspect] | None":
         return _NO_ASPECTS if faithful else None
 
     elif _is_generic_hint(x):
-        # A parametrised user generic. Whether a value matches depends on its
-        # `__orig_class__`, which no bounded cache key captures, so this is
-        # uncacheable and routes to the tier-two verify cache. Ordered below the
-        # plain-`type` case for the same reason as in `resolve_type_hint`.
-        return None
+        # A parametrised user generic, e.g. `Box[int]`. Whether a value matches
+        # depends on its `__orig_class__` and on nothing else — see
+        # `is_bearable_with_orig`, which falls back to `type(x)` when there is no
+        # such record — and the generic component of the cache key is precisely
+        # that. Ordered below the plain-`type` case for the same reason as in
+        # `resolve_type_hint`.
+        #
+        # Note how narrow this is: it holds only for hints that go through
+        # `__orig_class__`. A parametrised builtin such as `list[int]` is matched by
+        # inspecting the elements, which no key derived from the value's type can
+        # predict, and `_is_generic_hint` excludes it. That exclusion is what keeps
+        # this sound, so do not widen it.
+        return _GENERIC
 
     else:
         warnings.warn(

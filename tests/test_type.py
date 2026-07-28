@@ -2,7 +2,7 @@ import abc
 import enum
 import sys
 import typing
-from typing import Literal
+from typing import Generic, Literal, TypeVar
 
 import pytest
 
@@ -496,7 +496,24 @@ def test_arg_keys_agree_with_cache_key():
     class SomeClass:
         pass
 
-    values = [1, True, "x", b"x", None, 1.5, [1], SomeClass, int, SomeClass()]
+    class SomeGeneric(Generic[TypeVar("T")]):
+        pass
+
+    values = [
+        1,
+        True,
+        "x",
+        b"x",
+        None,
+        1.5,
+        [1],
+        SomeClass,
+        int,
+        SomeClass(),
+        # Carries `__orig_class__`, and the same class without one.
+        SomeGeneric[int](),
+        SomeGeneric(),
+    ]
     for aspects in subsets:
         for x in values:
             expected = cache_key(x, aspects=aspects)

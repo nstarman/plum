@@ -13,6 +13,7 @@ from beartype.vale import Is
 from plum import Dispatcher, NotFoundLookupError
 from plum._signature import Signature
 from plum._type import (
+    Aspect,
     _aspects,
     _is_generic_hint,
     is_cacheable,
@@ -163,17 +164,54 @@ def test_variance_is_beartypes_call() -> None:
     assert bool(TypeHint(Box[bool]) <= TypeHint(Box[int]))
 
 
-def test_generic_is_uncacheable() -> None:
-    """A parametrised user generic must route to the tier-two verify cache."""
-    assert _aspects(resolve_type_hint(Box[int])) is None
-    assert not is_cacheable(Box[int])
+def test_generic_is_cacheable_via_the_generic_aspect() -> None:
+    """A parametrised user generic is cacheable through `Aspect.GENERIC`."""
+    assert _aspects(resolve_type_hint(Box[int])) == frozenset({Aspect.GENERIC})
+    assert is_cacheable(Box[int])
+    # Cacheable, but not faithful: the key needs more than `type(x)`.
     assert not is_faithful(Box[int])
     # The bare class stays faithful.
     assert is_faithful(Box)
+    # A union of generics composes; so does a generic beside a faithful type.
+    assert _aspects(resolve_type_hint(Box[int] | None)) == frozenset({Aspect.GENERIC})
 
 
-def test_generic_dispatch_uses_verify_cache() -> None:
-    """Tier two serves generic dispatch; no generics-specific cache is added."""
+def test_hints_that_inspect_elements_stay_uncacheable() -> None:
+    """Only hints matched through `__orig_class__` may become cacheable.
+
+    `is_bearable([1], list[int])` and `is_bearable(["a"], list[int])` disagree for
+    two values of the same runtime type, so no key built from the type can decide
+    it. Anything that contains such a hint must stay uncacheable too.
+    """
+    for hint in (
+        list[int],
+        dict[str, int],
+        tuple[int, ...],
+        list[Box[int]],
+        Box[int] | list[int],
+        Annotated[Box[int], Is[lambda x: True]],
+    ):
+        assert is_cacheable(hint) is False, hint
+
+
+def test_values_without_orig_class_share_a_verdict() -> None:
+    """Values of one runtime type and no `__orig_class__` must match alike.
+
+    This is what makes `Aspect.GENERIC` sound: such values are decided by their
+    runtime class alone, which the key already carries.
+    """
+    bare = [Box(1), Box("a"), Box([1]), Box(None), Box(Box(1))]
+    int_boxes, str_boxes = [IntBox(), IntBox()], [StrBox(), StrBox()]
+    int_boxes[1].v = "a"
+    str_boxes[1].v = 1
+    for hint in (Box[int], Box[str], Box[list[int]], Box):
+        signature = Signature(hint)
+        for group in (bare, int_boxes, str_boxes):
+            assert len({signature.match((v,)) for v in group}) == 1, (hint, group)
+
+
+def test_generic_dispatch_is_served_by_tier_one() -> None:
+    """Generic dispatch memoises the method: no resolver run on a warm call."""
     dispatch = Dispatcher()
 
     @dispatch
@@ -186,16 +224,56 @@ def test_generic_dispatch_uses_verify_cache() -> None:
 
     assert f(Box[int](1)) == "int"
     # `@dispatch` returns the `Function` itself.
-    assert f._resolver.aspects is None, "the resolver must be uncacheable"
-    assert f._verify_cache, "the verify cache did not populate"
-    # The bucket keys on the bare runtime type and must not exclude either method.
-    # A bucket is `(methods, entries, first_wins)`; only the methods matter here.
-    assert f._verify_cache[(Box,)][0] == f._resolver.methods
-    # Nothing is memoised in tier one for an uncacheable resolver.
-    assert not f._cache
-    # Warm dispatch still selects correctly.
+    assert f._resolver.aspects == frozenset({Aspect.GENERIC})
+    # The key is the runtime type plus the recorded parametrisation.
+    assert set(f._cache) == {((Box, Box[int]),)}
+    # Tier two is not involved at all.
+    assert not f._verify_cache
+    # Warm dispatch still selects correctly, and each parametrisation gets its own
+    # entry.
     assert f(Box[str]("a")) == "str"
     assert f(Box[int](2)) == "int"
+    assert set(f._cache) == {((Box, Box[int]),), ((Box, Box[str]),)}
+
+
+def test_bare_and_parametrised_values_do_not_collide() -> None:
+    """Values with and without `__orig_class__` must not share a cache entry."""
+    dispatch = Dispatcher()
+
+    @dispatch
+    def f(x: Box) -> str:
+        return "bare"
+
+    @dispatch
+    def f(x: Box[int]) -> str:
+        return "int"
+
+    assert f(Box[int](1)) == "int"
+    assert f(Box(1)) == "bare"
+    # A second bare value of the same type must reuse that entry, not the other.
+    assert f(Box("a")) == "bare"
+    assert f(IntBox()) == "int"
+    assert f(Box[int](2)) == "int"
+    assert set(f._cache) == {((Box, Box[int]),), ((Box, None),), ((IntBox, None),)}
+
+
+def test_parametrised_builtins_still_use_the_verify_cache() -> None:
+    """A `list[int]` method must keep routing to tier two."""
+    dispatch = Dispatcher()
+
+    @dispatch
+    def f(x: list[int]) -> str:
+        return "int"
+
+    @dispatch
+    def f(x: list[str]) -> str:
+        return "str"
+
+    assert f([1]) == "int"
+    assert f._resolver.aspects is None
+    assert not f._cache
+    assert f._verify_cache
+    assert f(["a"]) == "str"
 
 
 def test_might_match_includes_generic_methods() -> None:
