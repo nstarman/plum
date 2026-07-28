@@ -3,7 +3,8 @@ __all__ = ("Function",)
 import os
 import textwrap
 import threading
-from collections.abc import Callable
+import weakref
+from collections.abc import Callable, Iterator
 from copy import copy
 from functools import partial, wraps
 from types import MethodType
@@ -139,6 +140,52 @@ class _ModuleDescriptor(str):
         return module
 
 
+@mypyc_attr(native_class=False)
+class _Handle:
+    """A weak-referenceable stand-in for a :class:`Function`. See
+    :class:`_LiveFunctions` for why the indirection exists; non-native so that it can
+    be weakly referenced at all."""
+
+    def __init__(self, function: "Function", /) -> None:
+        self.function = function
+
+
+class _LiveFunctions:
+    """The set of live :class:`Function`s, held without pinning any of them.
+
+    A `mypyc` native class cannot be the target of a weak reference — the generated
+    deallocator never clears an instance's weak references — so a plain `WeakSet` of
+    functions is not available here. Each function is instead reached through a
+    plain-Python handle: this set holds the handle weakly, the handle holds the
+    function, and the function holds the handle back. That cycle keeps the entry alive
+    for exactly as long as the function is reachable from anywhere else, and the cyclic
+    garbage collector drops the pair once it is not, which is all
+    :func:`plum.clear_all_cache` needs and leaves nothing pinned for the lifetime of
+    the process.
+    """
+
+    _handles: "weakref.WeakSet[_Handle]"
+
+    def __init__(self) -> None:
+        self._handles = weakref.WeakSet()
+
+    def add(self, f: "Function", /) -> None:
+        f._handle = _Handle(f)
+        self._handles.add(f._handle)
+
+    def discard(self, f: "Function", /) -> None:
+        self._handles.discard(f._handle)
+
+    def __iter__(self) -> "Iterator[Function]":
+        return iter([h.function for h in self._handles])
+
+    def __contains__(self, f: object) -> bool:
+        return any(h.function is f for h in self._handles)
+
+    def __len__(self) -> int:
+        return len(self._handles)
+
+
 class Function:
     #: The class-level docstring, served as `Function.__doc__` by `_DocDescriptor`.
     _class_doc: ClassVar[str] = """A function.
@@ -150,7 +197,10 @@ class Function:
             redefined. Defaults to `False`.
     """
 
-    _instances: ClassVar[list["Function"]] = []
+    _instances: ClassVar[_LiveFunctions] = _LiveFunctions()
+    """Every live :class:`Function`, for :func:`plum.clear_all_cache`. Weak, so
+    that a function that has gone out of scope is collected rather than pinned
+    here for the lifetime of the process."""
 
     # Instance attributes are declared so `Function` can be a `mypyc` native class.
     _f: Callable[..., Any]
@@ -164,6 +214,7 @@ class Function:
     _resolved: list[tuple[Callable[..., Any], "Signature | None", int | None]]
     _resolver: Resolver
     _lock: "threading.RLock"
+    _handle: _Handle
     __name__: str
     __qualname__: str
     __wrapped__: Callable[..., Any]
@@ -175,7 +226,7 @@ class Function:
         owner: str | None = None,
         warn_redefinition: bool = False,
     ) -> None:
-        Function._instances.append(self)
+        Function._instances.add(self)
 
         self._f = f
         # Cache maps argument keys to `(method, return_type)`. Keys come either from

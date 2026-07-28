@@ -48,7 +48,7 @@ def test_function():
     assert g.__doc__ == "Doc"
 
     # Check global tracking of functions.
-    assert Function._instances[-1] == g
+    assert g in Function._instances
 
 
 def test_module_of_a_function_without_one(dispatch: plum.Dispatcher):
@@ -866,3 +866,19 @@ def test_call_mro_uncacheable():
     assert c.do_uncacheable(["a"]) == "base"
     assert c.do_uncacheable(["a"]) == "base"
     assert c.do_uncacheable([1]) == "child"
+
+
+def test_instances_does_not_pin_functions():
+    """Global tracking must not keep a dead `Function` alive."""
+    import gc
+
+    def f(x):
+        pass
+
+    # Asserted through the registry rather than a `weakref.ref` to the function: a
+    # `mypyc`-compiled `Function` is a native class and cannot be weakly referenced.
+    gc.collect()
+    before = len(Function._instances)
+    Function(f)
+    gc.collect()
+    assert len(Function._instances) == before
