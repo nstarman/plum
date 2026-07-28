@@ -199,14 +199,22 @@ def _is_hint(x: object) -> bool:
 
 
 def _is_generic_hint(x: object, /) -> bool:
-    """Check if an object is a parametrised user-defined generic, like `Box[int]`.
+    """Check if an object is a parametrised :class:`typing.Generic` subclass.
 
-    Only a hint that :func:`_is_hint` rejects can qualify. That check already claims
-    every special form — `Annotated`, `Union`, `Optional`, `Callable`, `Literal`,
-    `type[X]` and the parametrised builtins all live in `typing`, `types`,
-    `collections.abc` or `builtins` — so an origin with arguments left over here is a
-    :class:`typing.Generic` subclass from user code. Plum's own parametric types are
-    plain classes with no origin and are excluded for the same reason.
+    The test is that the origin is a class inheriting :class:`typing.Generic`, which
+    is exactly the population whose parameter cannot be recovered from the value: such
+    an instance records it in `__orig_class__` instead. Everything else is excluded by
+    that same test rather than by name — the parametrised builtins (`list[int]`), the
+    abstract base classes (`Sequence[int]`), `re.Pattern[str]` and
+    `AbstractContextManager[int]` are not `Generic` subclasses and beartype checks
+    them structurally, while `Annotated`, `Union`, `Optional`, `Literal` and
+    `type[X]` have origins that are not classes at all. Plum's own parametric types
+    have no origin.
+
+    Deliberately *not* keyed on `__module__` (as :func:`_is_hint` is): a generic
+    declared in an `exec`'d namespace, a doctest among them, reports its module as
+    `builtins`, and its subscript is a `typing._GenericAlias`, so a module test
+    mistakes it for a `typing` special form.
 
     Args:
         x (object): Object.
@@ -214,7 +222,12 @@ def _is_generic_hint(x: object, /) -> bool:
     Returns:
         bool: `True` if `x` is a parametrised user generic and `False` otherwise.
     """
-    return not _is_hint(x) and get_origin(x) is not None and get_args(x) != ()
+    origin = get_origin(x)
+    return (
+        isinstance(origin, type)
+        and issubclass(origin, typing.Generic)
+        and get_args(x) != ()
+    )
 
 
 def _has_generic_hint(x: object, /) -> bool:

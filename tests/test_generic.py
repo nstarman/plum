@@ -1,6 +1,8 @@
 """Dispatch on user-defined :class:`typing.Generic` subclasses."""
 
-from collections.abc import Callable
+import re
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import AbstractContextManager
 from typing import Annotated, Any, Generic, Literal, Optional, TypeVar, Union
 
 import pytest
@@ -10,7 +12,13 @@ from beartype.vale import Is
 
 from plum import Dispatcher, NotFoundLookupError
 from plum._signature import Signature
-from plum._type import _aspects, is_cacheable, is_faithful, resolve_type_hint
+from plum._type import (
+    _aspects,
+    _is_generic_hint,
+    is_cacheable,
+    is_faithful,
+    resolve_type_hint,
+)
 
 T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
@@ -242,6 +250,65 @@ def test_no_warning_for_generic_hints(recwarn: pytest.WarningsRecorder) -> None:
 
     assert f(Box[int](1)) == "int"
     assert [w for w in recwarn.list if "Could not" in str(w.message)] == []
+
+
+def test_generic_defined_in_an_exec_namespace() -> None:
+    """A generic whose module is `builtins`, as in a doctest, still dispatches.
+
+    `exec` without a `__name__` leaves `Box.__module__ == "builtins"`, and
+    `Box[int]` is then a `typing._GenericAlias` — so a module-name test mistakes it
+    for a `typing` special form. The gate keys on `Generic` inheritance instead.
+    """
+    ns: dict[str, Any] = {}
+    exec(
+        "from typing import Generic, TypeVar\n"
+        'T = TypeVar("T")\n'
+        "class Box(Generic[T]):\n"
+        "    def __init__(self, v): self.v = v\n",
+        ns,
+    )
+    box = ns["Box"]
+    assert box.__module__ == "builtins"
+    assert _is_generic_hint(box[int])
+    assert not _is_generic_hint(box)
+
+    dispatch = Dispatcher()
+
+    @dispatch
+    def f(x: box[int]) -> str:
+        return "int"
+
+    @dispatch
+    def f(x: box[str]) -> str:
+        return "str"
+
+    assert f(box[int](1)) == "int"
+    assert f(box[str]("a")) == "str"
+
+
+def test_gate_excludes_builtins_abcs_and_special_forms() -> None:
+    """Only true `Generic` subclasses take the `__orig_class__` path."""
+    for hint in (
+        list[int],
+        dict[str, int],
+        tuple[int, ...],
+        set[int],
+        Sequence[int],
+        Iterable[int],
+        Mapping[str, int],
+        re.Pattern[str],
+        AbstractContextManager[int],
+        type[int],
+        Literal[1],
+        Annotated[int, "meta"],
+        Union[int, str],  # noqa: UP007
+        int,
+        Box,
+    ):
+        assert not _is_generic_hint(hint), hint
+
+    for hint in (Box[int], Pair[int, str], CoBox[int], Box[list[int]]):
+        assert _is_generic_hint(hint), hint
 
 
 def test_parametrised_builtins_still_dispatch() -> None:

@@ -224,6 +224,90 @@ class MyClass(metaclass=MyMeta):
     ...
 ```
 
+(generics)=
+## Dispatching on User-Defined Generics
+
+You can dispatch on a parametrised subclass of `typing.Generic`.
+At runtime, `Box[int](1)` and `Box[str]("a")` are both plain `Box` instances, so an
+instance check cannot tell them apart.
+Python does record the intent, though: instantiating a subscripted generic sets
+`__orig_class__` on the instance, and Plum dispatches on that.
+
+```python
+from typing import Generic, TypeVar
+
+from plum import dispatch
+
+T = TypeVar("T")
+
+
+class Box(Generic[T]):
+    def __init__(self, v):
+        self.v = v
+
+
+@dispatch
+def unbox(b: Box[int]):
+    return "an integer"
+
+
+@dispatch
+def unbox(b: Box[str]):
+    return "a string"
+
+
+@dispatch
+def unbox(b: Box):
+    return "unparametrised"
+```
+
+```python
+>>> unbox(Box[int](1))
+'an integer'
+
+>>> unbox(Box[str]("a"))
+'a string'
+```
+
+An instance created without a parameter records nothing, so it matches only the
+unparametrised method:
+
+```python
+>>> unbox(Box(1.0))
+'unparametrised'
+```
+
+A subclass of a parametrised generic records its parameter statically, in
+`__orig_bases__`, so it dispatches even though its instances carry no `__orig_class__`:
+
+```python
+>>> class IntBox(Box[int]):
+...     def __init__(self):
+...         super().__init__(1)
+
+>>> unbox(IntBox())
+'an integer'
+```
+
+Whether one parametrisation is a subtype of another — that is, how a `TypeVar`'s
+variance is interpreted — is Beartype's decision, not Plum's.
+
+Parametrised generics are *not* cacheable: whether an argument matches depends on its
+`__orig_class__`, which no key derived from the argument can capture. A function
+dispatching on one therefore uses the **verify** cache described above, memoising which
+methods could possibly match the runtime types and checking that narrowed list on every
+call. The unparametrised class stays faithful.
+
+```python
+>>> from plum import is_cacheable
+
+>>> is_cacheable(Box[int])
+False
+
+>>> is_cacheable(Box)
+True
+```
+
 (moduletype)=
 ## `ModuleType`
 
