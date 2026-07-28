@@ -349,6 +349,49 @@ def test_aspect_key_survives_clear_cache_with_reregister(dispatch):
     assert f(1) == "one"
 
 
+def test_literal_dispatch_cache_is_bounded(dispatch):
+    """A `Literal` method plus caller-controlled values must not grow the cache
+    without bound. Dispatch stays correct past the limit; only the memoisation
+    stops."""
+    from plum._function import _VALUE_CACHE_LIMIT
+
+    @dispatch
+    def f(x: Literal["ready"]):
+        return "ready"
+
+    @dispatch
+    def f(x: str):
+        return "other"
+
+    for i in range(_VALUE_CACHE_LIMIT + 100):
+        assert f(f"v{i}") == "other"
+
+    assert len(f._cache) == _VALUE_CACHE_LIMIT
+    # Beyond the limit, resolution still gives the right answer.
+    assert f("ready") == "ready"
+    assert f("v0") == "other"
+    assert len(f._cache) == _VALUE_CACHE_LIMIT
+
+
+def test_identity_only_dispatch_cache_is_not_bounded(dispatch):
+    """The bound applies to `VALUE` resolvers only: classes are bounded already."""
+    from plum._function import _VALUE_CACHE_LIMIT
+
+    @dispatch
+    def f(x: type[int]):
+        return "type[int]"
+
+    @dispatch
+    def f(x: object):
+        return "object"
+
+    n = _VALUE_CACHE_LIMIT + 10
+    for i in range(n):
+        assert f(type(f"C{i}", (), {})) == "object"
+
+    assert len(f._cache) > _VALUE_CACHE_LIMIT
+
+
 def test_literal_dispatch_unhashable_argument(dispatch):
     @dispatch
     def f(x: Literal[1]):

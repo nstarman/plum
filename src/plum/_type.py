@@ -414,7 +414,18 @@ def cache_key(
     `type[X]` or `Literal` therefore accumulates one cache entry per distinct argument
     class or value, and pins that class or value, for the function's lifetime;
     dynamically created classes are not collected. Call `f.clear_cache()` (or
-    :func:`plum.clear_all_cache`) to release them.
+    :func:`plum.clear_all_cache`) to release them. Because a `Literal` argument's value
+    is typically caller-supplied, a function dispatching on one stops caching once it
+    holds `plum._function._VALUE_CACHE_LIMIT` entries; further arguments resolve
+    normally.
+
+    Args:
+        x (object): Value to compute a cache key for.
+        aspects (frozenset[:class:`Aspect`], optional): Aspects to capture. Defaults
+            to every aspect.
+
+    Returns:
+        tuple: Cache key for `x`.
     """
     key: tuple[object, ...] = (type(x),)
     if Aspect.IDENTITY in aspects:

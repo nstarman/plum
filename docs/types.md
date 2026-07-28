@@ -137,6 +137,11 @@ reference is what makes identity-based keying sound. So the cache grows with the
 number of distinct classes or values passed, and dynamically created classes stay
 alive for the lifetime of the function. Call `f.clear_cache()` or
 `plum.clear_all_cache()` to release them.
+
+A `Literal` argument's value usually comes from the caller, so that growth is
+unbounded in a way `type[X]` is not. A function dispatching on a `Literal` therefore
+stops adding cache entries once it holds 4096 of them. This is a memory ceiling only:
+arguments past it resolve normally, just without being memoised.
 ```
 
 Whether a function's types are cacheable decides which of two caches it uses.

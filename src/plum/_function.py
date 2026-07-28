@@ -14,8 +14,20 @@ from ._method import Method, MethodList
 from ._mypyc import mypyc_attr
 from ._resolver import AmbiguousLookupError, NotFoundLookupError, Resolver
 from ._signature import Signature, append_default_args
-from ._type import resolve_type_hint
+from ._type import Aspect, resolve_type_hint
 from ._util import TypeHint
+
+_VALUE_CACHE_LIMIT = 4096
+"""Maximum number of entries cached for a function whose methods dispatch on a
+`Literal`.
+
+Such a function gets one entry per distinct *value* ever passed, and the key holds a
+strong reference to it, so `Literal["ready"]` beside a `str` fallback would otherwise
+grow with the caller's data forever. The limit is a memory ceiling only: once it is
+reached, further arguments simply resolve normally, exactly as they did before
+`Literal` became cacheable at all, so no call can get a wrong answer. 4096 entries is
+a few hundred kilobytes, and any genuine vocabulary of literals — states, flags, enum
+names — is orders of magnitude smaller, so a legitimate workload never reaches it."""
 
 # Annotated (not left to inference as `None`) so a `mypyc`-compiled `_function` accepts
 # the external assignment `plum._function._promised_convert = convert` in `_promotion`.
@@ -593,8 +605,14 @@ class Function:
             # Cache miss. Run the resolver based on the arguments.
             method, return_type = self.resolve_method(args)
             # Cache only when the resolver is cacheable; otherwise `cache_key` would
-            # not uniquely determine the matching method.
-            if self._resolver.aspects is not None:
+            # not uniquely determine the matching method. A `Literal`-dispatching
+            # resolver keys on caller-supplied values, so its cache is additionally
+            # capped; see `_VALUE_CACHE_LIMIT`. This is the miss path, so the aspect
+            # test costs nothing that matters.
+            aspects = self._resolver.aspects
+            if aspects is not None and not (
+                Aspect.VALUE in aspects and len(self._cache) >= _VALUE_CACHE_LIMIT
+            ):
                 self._cache[types] = method, return_type
             return method, return_type
 
