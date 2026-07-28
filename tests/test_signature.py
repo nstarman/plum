@@ -489,6 +489,7 @@ _MIGHT_MATCH_HINTS = [
     list[int],
     list[str],
     tuple[int, ...],
+    tuple[()],
     dict[str, int],
     Callable[[int], int],
     Iterable[int],

@@ -380,6 +380,46 @@ def test_type_dispatch_does_not_capture_a_value_slot(dispatch):
     assert all(len(k) == 1 and len(k[0]) == 2 for k in g._cache)
 
 
+def test_empty_tuple_hint_dispatch_tier_one(dispatch):
+    """`tuple[()]` must not be treated as faithful: it matches on length."""
+
+    @dispatch
+    def f(x: tuple[()]):
+        return "empty"
+
+    @dispatch
+    def f(x: tuple):
+        return "tuple"
+
+    assert f(()) == "empty"
+    f.clear_cache()
+    # Warming with a non-empty tuple must not poison the `tuple` bucket.
+    assert f((1,)) == "tuple"
+    assert f(()) == "empty"
+
+
+def test_empty_tuple_hint_dispatch_tier_two(dispatch):
+    """The same, with an uncacheable method forcing the verify cache."""
+
+    @dispatch
+    def f(x: tuple[()]):
+        return "empty"
+
+    @dispatch
+    def f(x: tuple):
+        return "tuple"
+
+    @dispatch
+    def f(x: list[int]):  # makes the resolver uncacheable -> tier two
+        return "list"
+
+    assert f(()) == "empty"
+    f.clear_cache()
+    assert f((1,)) == "tuple"
+    assert f(()) == "empty"
+    assert f([1]) == "list"
+
+
 # The verify cache: an uncacheable function cannot memoise a method, but it can
 # memoise which methods are worth considering for given bare argument types.
 

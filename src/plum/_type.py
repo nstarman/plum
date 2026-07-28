@@ -480,6 +480,13 @@ def _aspects(x: object, /) -> "frozenset[Aspect] | None":
         origin = get_origin(x)
         args = get_args(x)
         if args == ():
+            if origin is tuple:
+                # `tuple[()]` is the one hint that is subscripted yet has no
+                # arguments: `get_args(tuple[()])` is `()` on Python >= 3.11. It
+                # matches on the *length* of the value, not its type, so it is
+                # neither faithful nor cacheable. Bare `typing.Tuple` is
+                # indistinguishable from it here and is conservatively lumped in.
+                return None
             # Unsubscripted hints tend to be faithful: `Any`, `List`, `Callable`, ...
             return _NO_ASPECTS
         if origin is type:

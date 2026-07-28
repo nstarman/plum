@@ -315,6 +315,29 @@ def test_is_cacheable_and_faithful_split():
     assert not is_cacheable(list[type[int]])
 
 
+def test_empty_tuple_hint_is_not_faithful():
+    """`tuple[()]` matches on the *length* of the value, not its type.
+
+    `typing.get_args(tuple[()])` is `()`, which used to send it down the
+    "unsubscripted hints are faithful" fast path. `()` matches it and `(1,)` does
+    not, so the classification must be uncacheable.
+    """
+    assert is_bearable((), tuple[()])
+    assert not is_bearable((1,), tuple[()])
+
+    assert not is_faithful(tuple[()])
+    assert not is_cacheable(tuple[()])
+    assert not is_faithful(typing.Tuple[()])  # noqa: UP006
+    assert not is_cacheable(typing.Tuple[()])  # noqa: UP006
+    # Nested in a union, the whole hint goes with it.
+    assert not is_cacheable(typing.Union[tuple[()], int])  # noqa: UP007
+
+    # Other unsubscripted hints are unaffected.
+    assert is_faithful(tuple)
+    assert is_faithful(typing.List)  # noqa: UP006
+    assert is_faithful(typing.Any)
+
+
 def test_cache_key_shape():
     class SomeClass:
         pass
