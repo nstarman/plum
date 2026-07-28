@@ -587,3 +587,15 @@ def test_is_comparable_compares_each_direction_at_most_once():
     # One `__le__`, short-circuiting on the first direction: one wrapper per type.
     assert len(calls) == 2, calls
     assert not Sig(int).is_comparable(1)
+
+
+def test_eq_settles_scalars_before_wrapping():
+    """A length, varargs or precedence difference must not wrap anything."""
+    for a, b in (
+        (Sig(int), Sig(int, int)),
+        (Sig(int), Sig(int, varargs=int)),
+        (Sig(int), Sig(int, precedence=1)),
+    ):
+        with count_wrappers() as calls:
+            assert a != b
+        assert calls == [], (a, b, calls)
