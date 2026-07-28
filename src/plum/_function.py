@@ -420,7 +420,18 @@ class Function(metaclass=_FunctionMeta):
 
     def __call__(self, *args: object, **kw: object) -> object:
         __tracebackhide__ = True
-        method, return_type = self._resolve_method_with_cache(args=args)
+        # The cache hit is inlined here: on a hit, none of the argument juggling in
+        # `_resolve_method_with_cache` is needed, and the call itself costs more than
+        # the lookup. `self._pending` must be checked *before* the lookup, since
+        # `register` leaves stale entries until the registrations are resolved. Only
+        # the lookup is inside the `try`, so a `KeyError` from the dispatched method
+        # is not swallowed and retried.
+        if self._pending:
+            self._resolve_pending_registrations()
+        try:
+            method, return_type = self._cache[tuple(map(self._arg_key, args))]
+        except KeyError:
+            method, return_type = self._resolve_method_with_cache(args=args)
         return _convert(method(*args, **kw), return_type)
 
     def _resolve_method_with_cache(

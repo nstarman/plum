@@ -765,3 +765,20 @@ def test_type_matches_only_classes_beartype_invariant():
     non_classes = [5, list[int], tuple[int], (lambda: 0), int | str]
     for x in non_classes:
         assert is_bearable(x, type[object]) is False
+
+
+def test_keyerror_from_method_body_propagates(dispatch):
+    # `Function.__call__` inlines the cache hit in a `try`/`except KeyError`. The
+    # dispatched call must stay outside it, so a `KeyError` raised by user code
+    # propagates instead of being caught and re-dispatched.
+    calls = []
+
+    @dispatch
+    def f(x: int):
+        calls.append(x)
+        raise KeyError("from the method body")
+
+    for _ in range(2):  # once on a cache miss, once on a cache hit
+        with pytest.raises(KeyError, match="from the method body"):
+            f(1)
+    assert calls == [1, 1]
