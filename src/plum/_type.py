@@ -350,7 +350,7 @@ def identity(x: object, /) -> object | None:
 
 
 def cache_key(
-    x: object, aspects: "frozenset[Aspect]" = _ALL_ASPECTS, /
+    x: object, /, aspects: "frozenset[Aspect]" = _ALL_ASPECTS
 ) -> tuple[object, ...]:
     """Cache key for a value `x`, capturing the requested `aspects`.
 

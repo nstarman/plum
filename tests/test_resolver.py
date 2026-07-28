@@ -302,3 +302,31 @@ def test_redefinition_warning_unwrapping():
         match=r".*`.*test_resolver.py:[0-9]+`.*" * 2,
     ):
         f._resolve_pending_registrations()
+
+
+def test_resolver_aspects_and_arg_key():
+    def f(x):
+        return x
+
+    r = Resolver()
+    assert r.aspects == frozenset()  # empty resolver: faithful
+    assert r._arg_key is type
+
+    r.register(Method(f, plum.Signature(int)))
+    r.register(Method(f, plum.Signature(float)))
+    assert r.aspects == frozenset() and r.is_faithful and r.is_cacheable
+    assert r._arg_key is type
+
+    # type[X] method: cacheable, not faithful; arg key becomes the aspect key.
+    r2 = Resolver()
+    r2.register(Method(f, plum.Signature(type[int])))
+    assert r2.aspects and not r2.is_faithful and r2.is_cacheable
+    assert r2._arg_key is not type
+    # `(type(int), identity(int))`; `int` has a plain metaclass.
+    assert r2._arg_key(int) == (type, int)
+
+    # Uncacheable method: aspects None, arg key falls back to type.
+    r3 = Resolver()
+    r3.register(Method(f, plum.Signature(list[int])))
+    assert r3.aspects is None and not r3.is_cacheable
+    assert r3._arg_key is type

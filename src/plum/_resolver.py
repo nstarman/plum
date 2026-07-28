@@ -4,7 +4,7 @@ import pydoc
 import sys
 import warnings
 from collections.abc import Callable, Iterable
-from functools import wraps
+from functools import partial, wraps
 
 from rich.console import Console, ConsoleOptions
 from rich.padding import Padding
@@ -13,6 +13,7 @@ from rich.text import Text
 from ._util import argsort
 from plum._method import Method, MethodList
 from plum._signature import Signature
+from plum._type import Aspect, cache_key
 from plum.repr import repr_source_path, rich_repr
 
 
@@ -241,14 +242,16 @@ class Resolver:
 
     Attributes:
         methods (list[:class:`.method.Method`]): Registered methods.
-        is_faithful (bool): Whether all methods are faithful or not.
+        aspects (frozenset | None): Union of all methods' aspects, or `None` if any
+            method is uncacheable. Drives caching. See :func:`.type.is_cacheable`.
         warn_redefinition (bool): Throw a warning whenever a method is redefined.
     """
 
     __slots__ = (
         "function_name",
         "methods",
-        "is_faithful",
+        "aspects",
+        "_arg_key",
         "warn_redefinition",
     )
 
@@ -264,8 +267,19 @@ class Resolver:
         """
         self.function_name = function_name
         self.methods: MethodList = MethodList()
-        self.is_faithful: bool = True
+        self.aspects: frozenset[Aspect] | None = frozenset()
+        self._arg_key: Callable[[object], object] = type
         self.warn_redefinition = warn_redefinition
+
+    @property
+    def is_faithful(self) -> bool:
+        """Whether all methods only use faithful types."""
+        return self.aspects == frozenset()
+
+    @property
+    def is_cacheable(self) -> bool:
+        """Whether dispatch on this resolver can be cached."""
+        return self.aspects is not None
 
     def doc(self, exclude: Callable[..., object] | None = None) -> str:
         """Concatenate the docstrings of all methods of this function. Remove duplicate
@@ -331,8 +345,20 @@ class Resolver:
         else:
             self.methods.append(method)
 
-        # Use a double negation for slightly better performance.
-        self.is_faithful = not any(not s.signature.is_faithful for s in self.methods)
+        # Union the methods' aspects; `None` if any method is uncacheable. The
+        # argument-key callable is bound once here, so the hot path is a branchless
+        # map. Faithful (`∅`) or uncacheable (`None`) → plain `type`; aspect-bearing
+        # → `cache_key` specialised to just these aspects.
+        acc: frozenset[Aspect] = frozenset()
+        for m in self.methods:
+            sub = m.signature.aspects
+            if sub is None:
+                self.aspects = None
+                self._arg_key = type
+                return
+            acc |= sub
+        self.aspects = acc
+        self._arg_key = type if not acc else partial(cache_key, aspects=acc)
 
     def __len__(self) -> int:
         return len(self.methods)
