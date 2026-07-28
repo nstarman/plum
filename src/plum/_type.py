@@ -4,9 +4,12 @@ __all__ = (
     "type_mapping",
     "resolve_type_hint",
     "is_faithful",
+    "is_cacheable",
+    "cache_key",
 )
 
 import abc
+import enum
 import sys
 import typing
 import warnings
@@ -283,30 +286,24 @@ def resolve_type_hint(x: object, /) -> object:
     return x
 
 
-def is_faithful(x: object, /) -> bool:
-    """Check whether a type hint is faithful.
-
-    A type or type hint `t` is defined _faithful_ if, for all `x`, the following holds
-    true::
-
-        isinstance(x, x) == issubclass(type(x), t)
-
-    You can control whether types are faithful or not by setting the attribute
-    `__faithful__`::
-
-        class UnfaithfulType:
-            __faithful__ = False
-
-    Args:
-        x (type or type hint): Type hint.
-
-    Returns:
-        bool: Whether `x` is faithful or not.
-    """
-    return _is_faithful(resolve_type_hint(x))
-
-
 UNION_TYPES = (typing.Union, UnionType, typing.Optional)
+
+
+class Aspect(enum.Enum):
+    """A property of an argument its dispatch cache key must capture.
+
+    Faithful types need none of these (`type(x)` suffices). Each member names an
+    extra thing `cache_key` must encode so that a category of non-faithful types
+    becomes cacheable. `IDENTITY` supports `type[X]`. Future members (e.g. a value
+    aspect for `Literal`) are additive.
+    """
+
+    IDENTITY = "identity"
+
+
+_NO_ASPECTS: "frozenset[Aspect]" = frozenset()
+_IDENTITY: "frozenset[Aspect]" = frozenset({Aspect.IDENTITY})
+_ALL_ASPECTS: "frozenset[Aspect]" = frozenset(Aspect)
 
 
 class _SupportsDunderFaithful(typing.Protocol):
@@ -318,42 +315,140 @@ def _has_dunder_faithful(x: type, /) -> TypeGuard[_SupportsDunderFaithful]:
     return hasattr(x, "__faithful__")
 
 
-def _is_faithful(x: object, /) -> bool:
+class _TypeIdentity:
+    """Identity cache-key wrapper for a class value.
+
+    A class cannot be used as a cache key directly: its hash and equality come from
+    its metaclass, so a metaclass with a custom `__eq__` would make distinct classes
+    collide (silent wrong hit) and one whose classes are unhashable would make the
+    key raise `TypeError`. This wrapper keys on `id`, sidestepping the metaclass, and
+    holds a reference to `cls` so its `id` is not reused while the entry lives.
+    """
+
+    __slots__ = ("cls",)
+
+    def __init__(self, cls: type, /) -> None:
+        self.cls = cls
+
+    def __hash__(self) -> int:
+        return id(self.cls)
+
+    def __eq__(self, other: object, /) -> bool:
+        return type(other) is _TypeIdentity and self.cls is other.cls
+
+
+def identity(x: object, /) -> object | None:
+    """The identity component of `cache_key` for `x`.
+
+    `None` for non-classes. For a class, the class itself when its metaclass is plain
+    `type` (whose hash is id-based and equality is identity — already safe and fast),
+    otherwise the metaclass-safe `_TypeIdentity` wrapper.
+    """
+    if not isinstance(x, type):
+        return None
+    return x if type(x) is type else _TypeIdentity(x)
+
+
+def cache_key(
+    x: object, aspects: "frozenset[Aspect]" = _ALL_ASPECTS, /
+) -> tuple[object, ...]:
+    """Cache key for a value `x`, capturing the requested `aspects`.
+
+    For any hint `t` with `is_cacheable(t)`, whether `x` matches `t` depends only on
+    `cache_key(x)`, so a dispatch result for `x` can be memoised under this key. The
+    key is `(type(x), *slots)`; a resolver passes only the aspects its own types need,
+    so it never captures more than necessary. Adding an aspect adds a slot here.
+    """
+    key: tuple[object, ...] = (type(x),)
+    if Aspect.IDENTITY in aspects:
+        key += (identity(x),)
+    return key
+
+
+def is_faithful(x: object, /) -> bool:
+    """Check whether a type hint is faithful.
+
+    A type or type hint `t` is _faithful_ if, for all `x`::
+
+        isinstance(x, t) == issubclass(type(x), t)
+
+    i.e. matching depends only on `type(x)`. Faithful types are cacheable with a plain
+    `type(x)` key. You can control faithfulness by setting `__faithful__`::
+
+        class UnfaithfulType:
+            __faithful__ = False
+
+    `type[X]` is *not* faithful (its match depends on class identity); see
+    :func:`is_cacheable`.
+    """
+    return _aspects(resolve_type_hint(x)) == _NO_ASPECTS
+
+
+def is_cacheable(x: object, /) -> bool:
+    """Check whether a type hint is cacheable.
+
+    `t` is _cacheable_ if, for all `x`, whether `x` matches `t` is a function of
+    :func:`cache_key(x) <cache_key>` alone. Every faithful type is cacheable; in
+    addition `type[X]` is cacheable but not faithful (its match `issubclass(x, X)`
+    depends on the class identity of `x`, which `cache_key` captures).
+    """
+    return _aspects(resolve_type_hint(x)) is not None
+
+
+def _combine(items: "typing.Iterable[object]", /) -> "frozenset[Aspect] | None":
+    """Union the aspects of `items` (each resolved); `None` if any is uncacheable."""
+    acc = _NO_ASPECTS
+    for item in items:
+        sub = _aspects(resolve_type_hint(item))
+        if sub is None:
+            return None
+        acc |= sub
+    return acc
+
+
+def _aspects(x: object, /) -> "frozenset[Aspect] | None":
+    """Classify a **resolved** hint into the cache aspects it needs, or `None`.
+
+    `frozenset()` = faithful (type-key suffices); `{IDENTITY}` = `type[X]`; a union is
+    the union of its members (`None` if any member is uncacheable); everything else
+    that is not a plainly faithful type is `None` (uncacheable). This is the single
+    classifier `is_faithful` and `is_cacheable` derive from.
+    """
     if _is_hint(x):
         origin = get_origin(x)
         args = get_args(x)
         if args == ():
-            # Unsubscripted type hints tend to be faithful. For example, `Any`,
-            # `List`, `Tuple`, `Dict`, `Callable`, and `Generator` are. When we
-            # come across a counter-example, we will refine this logic.
-            return True
-
+            # Unsubscripted hints tend to be faithful: `Any`, `List`, `Callable`, ...
+            return _NO_ASPECTS
+        if origin is type:
+            # `type[X]`: cacheable via the identity component of the cache key.
+            return _IDENTITY
         if origin in UNION_TYPES:
-            return all(is_faithful(arg) for arg in args)
-
-        return False
+            return _combine(args)
+        return None
 
     elif x is None or x == Ellipsis:
-        return True
+        return _NO_ASPECTS
 
     elif isinstance(x, (tuple, list)):
-        return all(is_faithful(arg) for arg in x)
+        return _combine(x)
+
     elif isinstance(x, type):
         if _has_dunder_faithful(x):
-            return x.__faithful__
-        else:
-            # This is the fallback method. Check whether `__instancecheck__` is default
-            # or not. If it is, assume that it is faithful.
-            return type(x).__instancecheck__ in {
-                type.__instancecheck__,
-                abc.ABCMeta.__instancecheck__,
-            }
+            return _NO_ASPECTS if x.__faithful__ else None
+        # Fallback: default `__instancecheck__` ⇒ faithful.
+        faithful = type(x).__instancecheck__ in {
+            type.__instancecheck__,
+            abc.ABCMeta.__instancecheck__,
+        }
+        return _NO_ASPECTS if faithful else None
+
     else:
         warnings.warn(
-            f"Could not determine whether `{x}` is faithful or not. "
-            f"I have concluded that the type is not faithful, so your code might run "
+            f"Could not determine whether `{x}` is cacheable or not. "
+            f"I have concluded that it is not cacheable, so your code might run "
             f"with subpar performance. "
             f"Please open an issue at https://github.com/beartype/plum.",
             stacklevel=2,
         )
-    return False
+    return None

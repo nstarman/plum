@@ -10,6 +10,8 @@ from plum._type import (
     PromisedType,
     ResolvableType,
     _is_hint,
+    cache_key,
+    is_cacheable,
     is_faithful,
     resolve_type_hint,
     type_mapping,
@@ -230,7 +232,7 @@ def test_is_faithful():
 
     # Test warning.
     with pytest.warns(
-        Warning, match=r"(?i)could not determine whether `(.*)` is faithful or not"
+        Warning, match=r"(?i)could not determine whether `(.*)` is cacheable or not"
     ):
         assert not is_faithful(1)
 
@@ -279,3 +281,72 @@ def test_is_faithful_literal(recwarn):
     assert not is_faithful(Literal[1])
     # There should be no warnings.
     assert len(recwarn) == 0
+
+
+def test_is_cacheable_and_faithful_split():
+    class SomeClass:
+        pass
+
+    # Faithful ⇒ cacheable, and type-keyed.
+    assert is_faithful(int) and is_cacheable(int)
+    assert is_faithful(typing.Any) and is_cacheable(typing.Any)
+    assert is_faithful(type) and is_cacheable(type)  # bare, unsubscripted
+    assert is_faithful(typing.Union[int, str])  # noqa: UP007
+
+    # type[X]: cacheable but NOT faithful.
+    assert not is_faithful(type[int])
+    assert is_cacheable(type[int])
+    assert not is_faithful(type[SomeClass])
+    assert is_cacheable(type[SomeClass])
+    assert not is_faithful(typing.Type[int])  # noqa: UP006
+    assert is_cacheable(typing.Type[int])  # noqa: UP006
+    assert is_cacheable(typing.Union[type[int], str])  # noqa: UP007
+
+    # Genuinely uncacheable.
+    assert not is_cacheable(typing.Literal[1])
+    assert not is_cacheable(list[int])
+    assert not is_cacheable(list[type[int]])
+
+
+def test_cache_key_shape():
+    class SomeClass:
+        pass
+
+    # Non-classes keyed on their type.
+    assert cache_key(1) == (int, None)
+    assert cache_key("x") == (str, None)
+    # Classes keyed on identity; distinct from a same-type instance key.
+    assert cache_key(int) == cache_key(int)
+    assert cache_key(int) != cache_key(str)
+    assert cache_key(int) != cache_key(1)
+    assert cache_key(SomeClass) == cache_key(SomeClass)
+
+
+def test_cache_key_survives_pathological_metaclasses():
+    # Unhashable class (metaclass defines __eq__, nulls __hash__): key must not raise.
+    class MetaUnhashable(type):
+        def __eq__(cls, other):
+            return cls is other
+
+    class Unhashable(metaclass=MetaUnhashable):
+        pass
+
+    d = {cache_key(Unhashable): "ok"}
+    assert d[cache_key(Unhashable)] == "ok"
+
+    # Lying equality + colliding hash: distinct classes must not collide in the key.
+    class MetaLie(type):
+        def __eq__(cls, other):
+            return True
+
+        def __hash__(cls):
+            return 7
+
+    class A(int, metaclass=MetaLie):
+        pass
+
+    class B(metaclass=MetaLie):
+        pass
+
+    assert cache_key(A) != cache_key(B)
+    assert {cache_key(A): 1}.get(cache_key(B)) is None
