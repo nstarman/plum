@@ -1,8 +1,10 @@
 import inspect
 import operator
 from collections.abc import Callable, Iterable
+from contextlib import contextmanager
 from numbers import Number as Num, Real as Re
 from typing import Annotated, Any, Literal, Optional, Union
+from unittest.mock import patch
 
 import pytest
 
@@ -553,3 +555,26 @@ def test_might_match_arity_and_varargs():
     # A list of the wrong element type cannot be ruled out by the runtime type.
     assert s.might_match((1, ["a"]))
     assert not s.match((1, ["a"]))
+
+
+@contextmanager
+def count_wrappers():
+    """Count `TypeHintWrapper` constructions made by :mod:`plum._signature`."""
+    calls: list[object] = []
+    real = plum._signature.TypeHintWrapper
+
+    def counting(t: object) -> object:
+        calls.append(t)
+        return real(t)
+
+    with patch.object(plum._signature, "TypeHintWrapper", counting):
+        yield calls
+
+
+def test_le_wraps_each_type_once():
+    """`__le__` must not rewrap its types for the subset pass."""
+    # `bool <= int` on both positions: the equality pass fails and the subset pass
+    # decides, which is exactly when a two-pass implementation wraps twice.
+    with count_wrappers() as calls:
+        assert Sig(bool, bool) <= Sig(int, int)
+    assert len(calls) == 4, calls

@@ -218,12 +218,13 @@ class Signature(Comparable):
         # one place.
         self_types = self.expand_varargs(len(other.types))
         other_types = other.expand_varargs(len(self.types))
-        if all(
-            [
-                TypeHintWrapper(x) == TypeHintWrapper(y)
-                for x, y in zip(self_types, other_types, strict=True)
-            ]
-        ):
+        # Wrap the pairs once and reuse them for both the equality and the subset
+        # pass: the second pass used to rewrap every type from scratch.
+        wrapped = [
+            (TypeHintWrapper(x), TypeHintWrapper(y))
+            for x, y in zip(self_types, other_types, strict=True)
+        ]
+        if all(x == y for x, y in wrapped):
             if self.has_varargs and other.has_varargs:
                 self_varargs = TypeHintWrapper(self.varargs)
                 other_varargs = TypeHintWrapper(other.varargs)
@@ -238,12 +239,7 @@ class Signature(Comparable):
             else:
                 return True
 
-        elif all(
-            [
-                TypeHintWrapper(x) <= TypeHintWrapper(y)
-                for x, y in zip(self_types, other_types, strict=True)
-            ]
-        ):
+        elif all(x <= y for x, y in wrapped):
             # In this case, we have that `other >= self` is `False`, so returning `True`
             # gives that `other < self` and returning `False` gives that `other` cannot
             # be compared to `self`. Regardless of the return value, `other != self`.
