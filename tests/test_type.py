@@ -8,6 +8,7 @@ import pytest
 
 from plum._bear import is_bearable
 from plum._type import (
+    _ARG_KEYS,
     Aspect,
     ModuleType,
     PromisedType,
@@ -443,3 +444,30 @@ def test_cache_key_value_survives_unhashable_values():
 
     # Plain unhashable values are fine too.
     hash(cache_key([1], aspects=value_only))
+
+
+def test_arg_keys_agree_with_cache_key():
+    """`_ARG_KEYS` is a hot-path specialisation of `cache_key`: keep them in sync."""
+    from itertools import chain, combinations
+
+    subsets = [
+        frozenset(s)
+        for s in chain.from_iterable(
+            combinations(Aspect, r) for r in range(len(Aspect) + 1)
+        )
+    ]
+    assert set(_ARG_KEYS) == set(subsets)
+
+    class SomeClass:
+        pass
+
+    values = [1, True, "x", b"x", None, 1.5, [1], SomeClass, int, SomeClass()]
+    for aspects in subsets:
+        for x in values:
+            expected = cache_key(x, aspects=aspects)
+            actual = _ARG_KEYS[aspects](x)
+            if aspects:
+                assert actual == expected, (aspects, x)
+            else:
+                # The faithful specialisation is plain `type`, not a 1-tuple.
+                assert (actual,) == expected, (aspects, x)

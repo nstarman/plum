@@ -401,6 +401,19 @@ def cache_key(
     return key
 
 
+_ARG_KEYS: "dict[frozenset[Aspect], Callable[[object], object]]" = {
+    _NO_ASPECTS: type,
+    _IDENTITY: lambda x: (type(x), identity(x)),
+    _VALUE: lambda x: (type(x), value(x)),
+    _IDENTITY | _VALUE: lambda x: (type(x), identity(x), value(x)),
+}
+"""`cache_key` specialised to each combination of aspects, for :class:`.Resolver` to
+bind on the hot path. Testing `Aspect` membership per call costs ~80 ns per aspect
+(hashing an `Enum` member is not cheap), which is the bulk of a cached dispatch; these
+do the same work with the aspects already decided. One entry per subset of `Aspect`;
+`test_arg_keys_agree_with_cache_key` holds them to `cache_key`."""
+
+
 def is_faithful(x: object, /) -> bool:
     """Check whether a type hint is faithful.
 
