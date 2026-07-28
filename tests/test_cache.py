@@ -1,3 +1,7 @@
+import itertools
+import random
+from collections.abc import Iterable
+from functools import partial
 from typing import Literal
 
 import pytest
@@ -688,3 +692,114 @@ def test_verify_cache_handles_varargs_and_arities(dispatch):
     assert len(f._verify_cache[(int, int)]) == 1
     assert len(f._verify_cache[(int, list)]) == 1
     assert len(f._verify_cache[(int, list, list)]) == 1
+
+
+# A differential fuzz test for the verify cache. Random method sets over uncacheable
+# hints are dispatched over a corpus of values, and every outcome is compared against
+# full resolution over all methods, cold and warm. Whatever a bucket does, it has to
+# agree with the resolver it stands in for.
+
+_FUZZ_HINTS = (
+    list[int],
+    list[str],
+    list[object],
+    list,
+    tuple[int, ...],
+    dict[str, int],
+    Iterable[int],
+    list[int] | int,
+    Literal[1],
+    int,
+    object,
+)
+
+# Beartype checks a container by sampling an element, so a heterogeneous container
+# would make `match` itself random and the comparison meaningless. Every container
+# here is homogeneous.
+_FUZZ_VALUES = (
+    [],
+    [1],
+    [1, 2],
+    ["a"],
+    [[1]],
+    (1, 2),
+    (),
+    {"a": 1},
+    {"a": "b"},
+    1,
+    2,
+    "a",
+    object(),
+)
+
+
+def _fuzz_function(rng):
+    """Build a function from a random set of methods over `_FUZZ_HINTS`.
+
+    Returns the function, a map from implementation to the index of the method that
+    implements it, and the arities the methods were built for.
+    """
+    impls = {}
+    f = None
+    for i in range(rng.randint(1, 4)):
+
+        def impl(*args, _i=i):
+            return _i
+
+        impl.__name__ = "fuzzed"
+        types = [rng.choice(_FUZZ_HINTS) for _ in range(rng.randint(1, 2))]
+        varargs = rng.choice(_FUZZ_HINTS) if rng.random() < 0.2 else plum.Missing
+        signature = plum.Signature(
+            *types, varargs=varargs, precedence=rng.choice((0, 0, 1))
+        )
+        if f is None:
+            f = plum.Function(impl)
+        f.register(impl, signature=signature, precedence=None)
+        impls[impl] = i
+    f._resolve_pending_registrations()
+    return f, impls
+
+
+def _resolved_index(f, args, impls):
+    """The index of the method full resolution selects, using no cache at all."""
+    return impls[f._resolver.resolve(args).implementation]
+
+
+def _outcome(call, impls):
+    """Run `call` and reduce whatever it does to a comparable value."""
+    try:
+        return ("value", call())
+    except plum.AmbiguousLookupError as e:
+        return ("ambiguous", tuple(sorted(impls[m.implementation] for m in e.methods)))
+    except plum.NotFoundLookupError as e:
+        return ("not found", tuple(sorted(impls[m.implementation] for m in e.methods)))
+
+
+def test_verify_cache_differential_fuzz():
+    rng = random.Random(20240611)
+    uncacheable = 0
+
+    for _ in range(300):
+        f, impls = _fuzz_function(rng)
+        uncacheable += not f._resolver.is_cacheable
+
+        for n in (1, 2, 3):
+            for args in itertools.product(_FUZZ_VALUES, repeat=n):
+                if n > 1 and rng.random() > 0.15:
+                    continue
+
+                # The reference: full resolution over every method, no cache at all.
+                reference = _outcome(partial(_resolved_index, f, args, impls), impls)
+
+                # Cold: every call rebuilds the bucket from scratch.
+                f.clear_cache(reregister=False)
+                cold = _outcome(partial(f, *args), impls)
+                # Warm: the bucket built by the call above is reused.
+                warm = _outcome(partial(f, *args), impls)
+
+                assert cold == reference, (args, f.methods)
+                assert warm == reference, (args, f.methods)
+
+    # The fast paths under test only run for an uncacheable resolver, so the corpus
+    # has to actually produce those.
+    assert uncacheable > 200
