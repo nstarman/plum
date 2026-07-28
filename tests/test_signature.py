@@ -578,3 +578,12 @@ def test_le_wraps_each_type_once():
     with count_wrappers() as calls:
         assert Sig(bool, bool) <= Sig(int, int)
     assert len(calls) == 4, calls
+
+
+def test_is_comparable_compares_each_direction_at_most_once():
+    """`is_comparable` must not detour via `__eq__`, which rewraps every type."""
+    with count_wrappers() as calls:
+        assert Sig(int).is_comparable(Sig(int))
+    # One `__le__`, short-circuiting on the first direction: one wrapper per type.
+    assert len(calls) == 2, calls
+    assert not Sig(int).is_comparable(1)

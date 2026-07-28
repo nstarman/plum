@@ -278,6 +278,23 @@ class Signature(Comparable):
         else:
             return False
 
+    def is_comparable(self, other: object, /) -> bool:
+        """Check whether this signature is comparable with another one.
+
+        Two signatures are comparable exactly when one is below the other, so one
+        `__le__` per direction settles it. The inherited implementation spells the
+        same question as `self < other or self == other or self > other`, which
+        additionally runs :meth:`__eq__` twice and so wraps every type three times
+        over.
+
+        Args:
+            other (object): Object to check comparability with.
+
+        Returns:
+            bool: Whether this signature is comparable with `other`.
+        """
+        return isinstance(other, Signature) and (self <= other or other <= self)
+
     def match(self, values: tuple[object, ...], /) -> bool:
         """Check whether values match the signature.
 
