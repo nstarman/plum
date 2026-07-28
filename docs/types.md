@@ -93,8 +93,9 @@ For example, this means that `list[T1]` is a subtype of `list[T2]` whenever
 Plum achieves performance by caching the dispatch process.
 Unfortunately, efficient caching is not always possible.
 Efficient caching is possible for so-called _cacheable_ types. The dispatch result for
-an argument `x` is cached under `cache_key(x)`, which is `type(x)` for a normal value
-and the identity of `x` when `x` is itself a class.
+an argument `x` is cached under `cache_key(x)`, which is built from `type(x)` plus, when
+some method needs it, the identity of `x` when `x` is itself a class and the value of
+`x` when `x` is a value a `Literal` could match.
 
 ````{admonition} Definition: cacheable type
 A type `t` is _cacheable_ if, for all `x`, whether `x` matches `t` is a function of
@@ -113,9 +114,15 @@ isinstance(x, t) == issubclass(type(x), t)
 ```
 ````
 
-Every faithful type is cacheable. Dispatching on a class via `type[X]` (or
-`typing.Type[X]`) is cacheable but *not* faithful: `issubclass(x, X)` depends on the
-identity of the class `x`, which `cache_key` captures.
+Every faithful type is cacheable, and some useful types are cacheable without being
+faithful:
+
+* Dispatching on a class via `type[X]` (or `typing.Type[X]`) is cacheable but *not*
+  faithful: `issubclass(x, X)` depends on the identity of the class `x`, which
+  `cache_key` captures.
+* `Literal[...]` is likewise cacheable but *not* faithful: `x` matches `Literal[v]`
+  when `isinstance(x, type(v))` and `x == v`, so the match depends on the value of `x`,
+  which `cache_key` captures too.
 
 For example, `int` is faithful, since `type(1) == int`;
 but `Literal[1]` is not faithful, since `issubclass(int, Literal[1])` is false.
@@ -134,20 +141,20 @@ from plum import dispatch
 
 
 @dispatch
-def add_5_faithful(x: int):
+def add_5_cacheable(x: int):
     return x + 5
 
 
 @dispatch
-def add_5_unfaithful(x: Literal[1]):
-    return x + 5
+def add_5_uncacheable(x: list[int]):
+    return [y + 5 for y in x]
 ```
 
 ```python
->>> %timeit add_5_faithful(1)  # doctest:+SKIP
+>>> %timeit add_5_cacheable(1)  # doctest:+SKIP
 585 ns ± 6.2 ns per loop (mean ± std. dev. of 7 runs, 1,000,000 loops each)
 
->>> %timeit add_5_unfaithful(1)  # doctest:+SKIP
+>>> %timeit add_5_uncacheable([1])  # doctest:+SKIP
 6.24 µs ± 68.9 ns per loop (mean ± std. dev. of 7 runs, 100,000 loops each)
 ```
 
@@ -168,6 +175,12 @@ False
 
 >>> is_cacheable(type[int])
 True
+
+>>> is_cacheable(Literal[1])
+True
+
+>>> is_cacheable(list[int])
+False
 ```
 
 If you implement, e.g., a type with a custom `__instancecheck__`, then `is_faithful`
