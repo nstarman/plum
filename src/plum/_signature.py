@@ -15,8 +15,15 @@ from rich.segment import Segment
 from beartype.door import TypeHint as TypeHintWrapper
 from beartype.peps import resolve_pep563 as beartype_resolve_pep563
 
-from ._bear import is_bearable
-from ._type import UNION_TYPES, Aspect, _combine, is_faithful, resolve_type_hint
+from ._bear import is_bearable, is_bearable_with_orig
+from ._type import (
+    UNION_TYPES,
+    Aspect,
+    _combine,
+    _has_generic_hint,
+    is_faithful,
+    resolve_type_hint,
+)
 from ._util import (
     Comparable,
     Missing,
@@ -93,6 +100,7 @@ class Signature(Comparable):
         "precedence",
         "aspects",
         "_check",
+        "_generic",
     )
 
     def __init__(
@@ -115,9 +123,12 @@ class Signature(Comparable):
 
         all_types = types if self.varargs is Missing else (*types, self.varargs)
         self.aspects: frozenset[Aspect] | None = _combine(all_types)
+        # Whether any type is, or contains, a parametrised user generic. Hoisted
+        # here so that matching a signature without one is byte-identical to before:
+        # it selects plain `is_bearable`, exactly as it always did.
+        self._generic: bool = any(_has_generic_hint(t) for t in all_types)
         # Bind the matcher once, at construction, rather than reaching for it on
-        # every candidate check. It is `is_bearable` for every signature; binding it
-        # here is what lets a signature select a different one.
+        # every candidate check.
         self._check: Callable[[object, TypeHint], bool] = is_bearable
 
     @staticmethod
@@ -330,7 +341,7 @@ class Signature(Comparable):
             return False
         else:
             types = self.expand_varargs(len(values))
-            check = self._check
+            check = is_bearable_with_orig if self._generic else self._check
             return all(check(v, t) for v, t in zip(values, types, strict=True))
 
     def matcher(self, n: int, /) -> Callable[[tuple[object, ...]], bool]:
@@ -396,7 +407,7 @@ class Signature(Comparable):
 
         # Additionally count one for every mismatching value above the
         # extra/missing arguments. There can be fewer types than values.
-        check = self._check
+        check = is_bearable_with_orig if self._generic else self._check
         for v, t in zip(values, types, strict=False):
             if not check(v, t):
                 distance += 1
@@ -424,7 +435,7 @@ class Signature(Comparable):
         # there is an explicit mismatch.
         varargs_matched = True
 
-        check = self._check
+        check = is_bearable_with_orig if self._generic else self._check
         for i, (v, t) in enumerate(zip(values, types, strict=False)):
             if not check(v, t):
                 if i < n_types:
@@ -459,7 +470,7 @@ def _bind_matcher(
     if not (len(types_) == n or (len(types_) < n and signature.has_varargs)):
         return lambda values: False
     types = signature.expand_varargs(n)
-    check = signature._check
+    check = is_bearable_with_orig if signature._generic else signature._check
     if n == 1:
         # By far the most common arity, and worth not paying a `zip` for.
         (t,) = types

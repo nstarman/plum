@@ -198,6 +198,41 @@ def _is_hint(x: object) -> bool:
         return False
 
 
+def _is_generic_hint(x: object, /) -> bool:
+    """Check if an object is a parametrised user-defined generic, like `Box[int]`.
+
+    Only a hint that :func:`_is_hint` rejects can qualify. That check already claims
+    every special form — `Annotated`, `Union`, `Optional`, `Callable`, `Literal`,
+    `type[X]` and the parametrised builtins all live in `typing`, `types`,
+    `collections.abc` or `builtins` — so an origin with arguments left over here is a
+    :class:`typing.Generic` subclass from user code. Plum's own parametric types are
+    plain classes with no origin and are excluded for the same reason.
+
+    Args:
+        x (object): Object.
+
+    Returns:
+        bool: `True` if `x` is a parametrised user generic and `False` otherwise.
+    """
+    return not _is_hint(x) and get_origin(x) is not None and get_args(x) != ()
+
+
+def _has_generic_hint(x: object, /) -> bool:
+    """Check whether a parametrised user generic occurs anywhere in the hint `x`.
+
+    This walks the arguments, so it also finds generics nested inside a union, an
+    `Annotated`, or a parametrised builtin. It is computed once per signature, at
+    registration, to keep the check off the matching path.
+
+    Args:
+        x (object): Type hint.
+
+    Returns:
+        bool: `True` if `x` contains a parametrised user generic.
+    """
+    return _is_generic_hint(x) or any(_has_generic_hint(a) for a in get_args(x))
+
+
 def _hashable(x: object | type) -> TypeGuard[Hashable]:
     """Check if an object is hashable.
 
@@ -250,6 +285,14 @@ def resolve_type_hint(x: object, /) -> object:
             # Ensure origin is not `None` before indexing.
             assert origin is not None
             return origin[args]
+
+    elif _is_generic_hint(x):
+        # A parametrised user generic, e.g. `Box[int]`. Rebuild it from its origin so
+        # that a `ResolvableType` nested in its arguments is resolved too.
+        origin = get_origin(x)
+        assert origin is not None
+        resolved_args = tuple(resolve_type_hint(arg) for arg in get_args(x))
+        return origin[resolved_args]
 
     elif x is None or x is Ellipsis:
         return x
@@ -532,6 +575,12 @@ def _aspects(x: object, /) -> "frozenset[Aspect] | None":
             return _VALUE
         if origin in UNION_TYPES:
             return _combine(args)
+        return None
+
+    elif _is_generic_hint(x):
+        # A parametrised user generic. Whether a value matches depends on its
+        # `__orig_class__`, which no bounded cache key captures, so this is
+        # uncacheable and routes to the tier-two verify cache.
         return None
 
     elif x is None or x == Ellipsis:
