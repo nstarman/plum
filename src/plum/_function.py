@@ -82,8 +82,10 @@ class Function(metaclass=_FunctionMeta):
         Function._instances.append(self)
 
         self._f: Callable[..., Any] = f
-        # Cache maps type tuples to `(method, return_type)`. Keys can be either
-        # actual types (from `__call__`) or `TypeHints` (from `invoke`).
+        # Cache maps argument keys to `(method, return_type)`. Keys come either from
+        # `__call__`, where each element is `self._arg_key(arg)` (a plain `type`, or a
+        # `cache_key` tuple when the resolver needs aspects), or from `invoke`, where
+        # each element is a `TypeHint`.
         self._cache: dict[tuple[TypeHint, ...], tuple[Callable[..., Any], TypeHint]]
         self._cache = {}
 
@@ -424,12 +426,16 @@ class Function(metaclass=_FunctionMeta):
         # `_resolve_method_with_cache` is needed, and the call itself costs more than
         # the lookup. `self._pending` must be checked *before* the lookup, since
         # `register` leaves stale entries until the registrations are resolved. Only
-        # the lookup is inside the `try`, so a `KeyError` from the dispatched method
-        # is not swallowed and retried.
+        # the lookup is inside the `try`: building the key can run user code (a
+        # metaclass `__hash__`, say) and the dispatched method can raise, and neither
+        # `KeyError` may be swallowed and silently retried. The key is parked in the
+        # `method` slot rather than a local of its own: an extra local costs ~7 ns
+        # here, about 2% of a cached call.
         if self._pending:
             self._resolve_pending_registrations()
+        method: Any = tuple(map(self._arg_key, args))
         try:
-            method, return_type = self._cache[tuple(map(self._arg_key, args))]
+            method, return_type = self._cache[method]
         except KeyError:
             method, return_type = self._resolve_method_with_cache(args=args)
         return _convert(method(*args, **kw), return_type)
@@ -450,10 +456,11 @@ class Function(metaclass=_FunctionMeta):
         if self._pending:
             self._resolve_pending_registrations()
 
-        # Compute the cache key via the resolver's bound `_arg_key` (`type` for a
-        # faithful/uncacheable resolver, an identity-aware `cache_key` for one that
-        # dispatches on `type[X]`). When called from `invoke`, `types` is passed
-        # directly. Both are hashable and work as cache keys.
+        # Compute the cache key via `self._arg_key`, the mirror of the resolver's
+        # bound key callable (`type` for a faithful or uncacheable resolver, a
+        # `cache_key` specialised to the resolver's aspects otherwise). When called
+        # from `invoke`, `types` is passed directly. Both are hashable and work as
+        # cache keys.
         if types is None:
             # Attempt to use the cache based on the types of the arguments.
             # At this point, `args` must be a tuple (not `Signature` or `None`).
