@@ -286,14 +286,6 @@ def resolve_type_hint(x: object, /) -> object:
             assert origin is not None
             return origin[args]
 
-    elif _is_generic_hint(x):
-        # A parametrised user generic, e.g. `Box[int]`. Rebuild it from its origin so
-        # that a `ResolvableType` nested in its arguments is resolved too.
-        origin = get_origin(x)
-        assert origin is not None
-        resolved_args = tuple(resolve_type_hint(arg) for arg in get_args(x))
-        return origin[resolved_args]
-
     elif x is None or x is Ellipsis:
         return x
 
@@ -312,6 +304,19 @@ def resolve_type_hint(x: object, /) -> object:
             return x
 
         return resolve_type_hint(x.resolve())
+
+    # This sits below the plain-`type` case on purpose. `resolve_type_hint` runs twice
+    # per call for any method with a return annotation (via `convert`), and a plain
+    # type such as `int` is by far the commonest argument. Testing it here means such
+    # a type returns above without ever paying for the origin lookup; a parametrised
+    # user generic is not a `type`, so it still reaches this branch.
+    elif _is_generic_hint(x):
+        # A parametrised user generic, e.g. `Box[int]`. Rebuild it from its origin so
+        # that a `ResolvableType` nested in its arguments is resolved too.
+        origin = get_origin(x)
+        assert origin is not None
+        resolved_args = tuple(resolve_type_hint(arg) for arg in get_args(x))
+        return origin[resolved_args]
 
     # For example, `Is[lambda x: x > 0]` is an example of a `BeartypeValidator`.
     # We shouldn't resolve those.
@@ -577,12 +582,6 @@ def _aspects(x: object, /) -> "frozenset[Aspect] | None":
             return _combine(args)
         return None
 
-    elif _is_generic_hint(x):
-        # A parametrised user generic. Whether a value matches depends on its
-        # `__orig_class__`, which no bounded cache key captures, so this is
-        # uncacheable and routes to the tier-two verify cache.
-        return None
-
     elif x is None or x == Ellipsis:
         return _NO_ASPECTS
 
@@ -598,6 +597,13 @@ def _aspects(x: object, /) -> "frozenset[Aspect] | None":
             abc.ABCMeta.__instancecheck__,
         }
         return _NO_ASPECTS if faithful else None
+
+    elif _is_generic_hint(x):
+        # A parametrised user generic. Whether a value matches depends on its
+        # `__orig_class__`, which no bounded cache key captures, so this is
+        # uncacheable and routes to the tier-two verify cache. Ordered below the
+        # plain-`type` case for the same reason as in `resolve_type_hint`.
+        return None
 
     else:
         warnings.warn(
