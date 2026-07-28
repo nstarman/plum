@@ -574,8 +574,8 @@ def test_verify_cache_narrows_the_methods_considered(dispatch):
     # But the methods that could possibly match are, bucketed by bare types.
     assert set(f._verify_cache) == {(list,), (int,)}
     # A `list` argument can never match `int`, and vice versa.
-    assert len(f._verify_cache[(list,)]) == 2
-    assert len(f._verify_cache[(int,)]) == 1
+    assert len(f._verify_cache[(list,)][0]) == 2
+    assert len(f._verify_cache[(int,)][0]) == 1
 
 
 def test_verify_cache_is_invalidated_by_registration(dispatch):
@@ -688,10 +688,107 @@ def test_verify_cache_handles_varargs_and_arities(dispatch):
     # method can match any arity, but only for arguments its varargs type admits:
     # it is in the `(int,)` bucket, where the varargs go unused, but not in the
     # `(int, int)` one, where `2` can never be a `list[int]`.
-    assert len(f._verify_cache[(int,)]) == 2
-    assert len(f._verify_cache[(int, int)]) == 1
-    assert len(f._verify_cache[(int, list)]) == 1
-    assert len(f._verify_cache[(int, list, list)]) == 1
+    assert len(f._verify_cache[(int,)][0]) == 2
+    assert len(f._verify_cache[(int, int)][0]) == 1
+    assert len(f._verify_cache[(int, list)][0]) == 1
+    assert len(f._verify_cache[(int, list, list)][0]) == 1
+
+
+# When a bucket can be put in resolution order, the first method that matches is the
+# one full resolution would select, so the call can return on it.
+
+_mro_dispatch = plum.Dispatcher()
+
+
+class _MroBase:
+    def f(self, x):
+        return "base"
+
+
+class _MroSub(_MroBase):
+    @_mro_dispatch
+    def f(self, x: list[int]):
+        return "sub"
+
+
+def test_verify_cache_orders_a_comparable_bucket(dispatch):
+    @dispatch
+    def f(x: list):
+        return "list"
+
+    @dispatch
+    def f(x: list[int]):
+        return "list[int]"
+
+    assert f([1]) == "list[int]"
+    assert f([1]) == "list[int]"
+    assert f(["a"]) == "list"
+
+    methods, _, first_wins = f._verify_cache[(list,)]
+    assert first_wins
+    # Most specific first.
+    assert [m.signature.types for m in methods] == [(list,), (list[int],)]
+
+
+def test_verify_cache_does_not_order_an_incomparable_bucket(dispatch):
+    @dispatch
+    def f(x: list[int]):
+        return "list[int]"
+
+    @dispatch
+    def f(x: list[str]):
+        return "list[str]"
+
+    assert f([1]) == "list[int]"
+    # Neither signature is below the other, and the empty list matches both, so the
+    # bucket cannot return on a first match.
+    assert not f._verify_cache[(list,)][2]
+    with pytest.raises(plum.AmbiguousLookupError):
+        f([])
+
+
+def test_verify_cache_ordering_ignores_precedence(dispatch):
+    @dispatch(precedence=5)
+    def f(x: list):
+        return "list"
+
+    @dispatch
+    def f(x: list[int]):
+        return "list[int]"
+
+    # A fully comparable bucket is never ambiguous, so precedence never gets a say:
+    # specificity decides, exactly as in full resolution.
+    assert f._verify_cache is not None
+    assert f([1]) == "list[int]"
+    assert f([1]) == "list[int]"
+    assert f._verify_cache[(list,)][2]
+
+
+def test_verify_cache_orders_equally_specific_methods_by_registration(dispatch):
+    @dispatch(precedence=1)
+    def f(x: list[int]):
+        return "first"
+
+    @dispatch
+    def f(x: list[int]):
+        return "second"
+
+    # The two signatures are below each other but not equal, since they differ in
+    # precedence. Full resolution keeps the last registered one, and so must the
+    # ordering, cold and warm.
+    assert f([1]) == "second"
+    assert f([1]) == "second"
+    assert f._verify_cache[(list,)][2]
+    assert f._resolver.resolve(([1],)).implementation([1]) == "second"
+
+
+def test_verify_cache_first_match_preserves_the_mro_fallback():
+    # `["a"]` lands in the same bucket as `[1]` but matches nothing in it, so the
+    # first-match path has to fall through to the walk up the MRO.
+    sub = _MroSub()
+    assert sub.f([1]) == "sub"
+    assert sub.f(["a"]) == "base"
+    assert sub.f(["a"]) == "base"
 
 
 # A differential fuzz test for the verify cache. Random method sets over uncacheable

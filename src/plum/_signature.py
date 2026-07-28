@@ -333,6 +333,23 @@ class Signature(Comparable):
             check = self._check
             return all(check(v, t) for v, t in zip(values, types, strict=True))
 
+    def matcher(self, n: int, /) -> Callable[[tuple[object, ...]], bool]:
+        """Bind a matcher for tuples of exactly `n` values.
+
+        This is :meth:`match` with the arity check and the expansion of the variable
+        arguments done once, here, instead of on every call. It is only correct for
+        tuples of `n` values, so the caller must know the arity up front — which a
+        cache keyed on the types of the arguments does.
+
+        Args:
+            n (int): Number of values the matcher will be given.
+
+        Returns:
+            function: Callable that takes a tuple of `n` values and returns whether
+                they match this signature.
+        """
+        return _bind_matcher(self, n)
+
     def might_match(self, values: tuple[object, ...], /) -> bool:
         """Check whether *any* values with the runtime types of `values` could match.
 
@@ -416,6 +433,38 @@ class Signature(Comparable):
                     varargs_matched = False
 
         return frozenset(mismatches), varargs_matched
+
+
+def _bind_matcher(
+    signature: Signature, n: int, /
+) -> Callable[[tuple[object, ...]], bool]:
+    """Implementation of :meth:`Signature.matcher`.
+
+    This lives at module level rather than in the body of :meth:`Signature.matcher`
+    because `mypyc` crashes with an internal `AssertionError` on a closure inside a
+    method of a class carrying a decorator it does not recognise, which
+    :class:`Signature` does (:func:`.repr.rich_repr`). A module-level function
+    compiles fine, and keeping the closures means the bound matcher stays exactly the
+    plain function call it was on the hot path.
+
+    Args:
+        signature (:class:`Signature`): Signature to bind a matcher for.
+        n (int): Number of values the matcher will be given.
+
+    Returns:
+        function: Callable that takes a tuple of `n` values and returns whether they
+            match `signature`.
+    """
+    types_ = signature.types
+    if not (len(types_) == n or (len(types_) < n and signature.has_varargs)):
+        return lambda values: False
+    types = signature.expand_varargs(n)
+    check = signature._check
+    if n == 1:
+        # By far the most common arity, and worth not paying a `zip` for.
+        (t,) = types
+        return lambda values: check(values[0], t)
+    return lambda values: all(check(v, t) for v, t in zip(values, types, strict=True))
 
 
 def inspect_signature(f: Callable[..., Any], /) -> inspect.Signature:

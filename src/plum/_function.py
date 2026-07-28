@@ -13,10 +13,24 @@ from typing_extensions import Self
 
 from ._method import Method, MethodList
 from ._mypyc import mypyc_attr
-from ._resolver import AmbiguousLookupError, NotFoundLookupError, Resolver
+from ._resolver import (
+    AmbiguousLookupError,
+    NotFoundLookupError,
+    Resolver,
+    resolution_order,
+)
 from ._signature import Signature, append_default_args
 from ._type import Aspect, resolve_type_hint
 from ._util import TypeHint
+
+_VerifyEntry = tuple[Callable[[tuple[object, ...]], bool], Callable[..., Any], TypeHint]
+"""A method of a verify-cache bucket, prepared for verification: a matcher bound to
+the arity of the bucket, the implementation, and the return type."""
+
+_VerifyBucket = tuple[MethodList, tuple[_VerifyEntry, ...], bool]
+"""A verify-cache bucket: the narrowed methods in registration order, their entries,
+and whether the first entry that matches settles the call. See
+:meth:`Function._build_verify_bucket`."""
 
 _VALUE_CACHE_LIMIT = 4096
 """Maximum number of entries cached for a function whose methods dispatch on a
@@ -205,7 +219,7 @@ class Function:
     # Instance attributes are declared so `Function` can be a `mypyc` native class.
     _f: Callable[..., Any]
     _cache: dict[tuple[TypeHint, ...], tuple[Callable[..., Any], TypeHint]]
-    _verify_cache: dict[tuple[TypeHint, ...], MethodList]
+    _verify_cache: dict[tuple[TypeHint, ...], _VerifyBucket]
     _doc: str
     _owner_name: str | None
     _owner: type | None
@@ -238,7 +252,7 @@ class Function:
         # runtime types of the arguments to the methods that arguments with those
         # types could possibly match, which is all a `type(x)` key can settle. The
         # methods still have to be verified against the actual arguments, hence the
-        # name; see `_resolve_method_with_cache`.
+        # name; see `_resolve_method_with_cache` and `_build_verify_bucket`.
         self._verify_cache = {}
 
         # Guards the lazy resolution of pending registrations, which mutates each
@@ -638,11 +652,16 @@ class Function:
         # only skips a lookup that must miss.
         if not self._resolver.is_cacheable and isinstance(args, tuple):
             try:
-                methods = self._verify_cache[types]
+                methods, entries, first_wins = self._verify_cache[types]
             except KeyError:
-                methods = self._verify_cache[types] = MethodList(
-                    m for m in self._resolver.methods if m.signature.might_match(args)
-                )
+                methods, entries, first_wins = self._build_verify_bucket(args, types)
+            if first_wins:
+                # The bucket is in resolution order, so the first method that matches
+                # is the one full resolution would select; see
+                # :func:`.resolver.resolution_order`.
+                for match, impl, return_type in entries:
+                    if match(args):
+                        return impl, return_type
             return self.resolve_method(args, methods)
 
         try:
@@ -666,6 +685,33 @@ class Function:
             ):
                 self._cache[types] = method, return_type
             return method, return_type
+
+    def _build_verify_bucket(
+        self, args: tuple[object, ...], types: tuple[TypeHint, ...], /
+    ) -> _VerifyBucket:
+        """Build and store the verify-cache bucket for arguments of these types.
+
+        Args:
+            args (tuple[object, ...]): Arguments that missed the cache.
+            types (tuple[:obj:`.TypeHint`, ...]): Key to store the bucket under.
+
+        Returns:
+            :obj:`_VerifyBucket`: The bucket.
+        """
+        methods = MethodList(
+            m for m in self._resolver.methods if m.signature.might_match(args)
+        )
+        # Ordering the bucket costs a quadratic number of signature comparisons, but
+        # only here, once per bucket, and it saves the whole candidate selection of
+        # `Resolver.resolve` on every call that hits it.
+        order = resolution_order(methods)
+        n = len(args)
+        entries = tuple(
+            (m.signature.matcher(n), m.implementation, m.return_type)
+            for m in (methods if order is None else order)
+        )
+        bucket = self._verify_cache[types] = (methods, entries, order is not None)
+        return bucket
 
     def invoke(self, *types: TypeHint) -> Callable[..., Any]:
         """Invoke a particular method.
