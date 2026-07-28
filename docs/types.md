@@ -139,10 +139,19 @@ alive for the lifetime of the function. Call `f.clear_cache()` or
 `plum.clear_all_cache()` to release them.
 ```
 
-Methods which have signatures that depend only on cacheable types will
-be performant.
-On the other hand, methods which have one or more signatures with one or more
-uncacheable types cannot use caching and will therefore be less performant.
+Whether a function's types are cacheable decides which of two caches it uses.
+
+* **Trust.** If every method uses only cacheable types, then the cache key
+  determines which method matches, so the method is memoised under that key. A
+  repeated call is one dictionary lookup and no type checking at all.
+* **Verify.** If any method uses an uncacheable type, then no key determines the
+  method, and nothing may be trusted without checking. The runtime types of the
+  arguments do, however, determine which methods could *possibly* match, so those
+  are memoised instead, and every call verifies that narrowed list against the
+  actual arguments. This is much slower than a trusted hit, but the methods ruled
+  out by the argument types are never checked again.
+
+Both caches are cleared by `f.clear_cache()` and `clear_all_cache()`.
 
 Example:
 
