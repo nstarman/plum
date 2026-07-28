@@ -404,3 +404,39 @@ def test_verify_cache_narrows_the_methods_considered(dispatch):
     # A `list` argument can never match `int`, and vice versa.
     assert len(f._verify_cache[(list,)]) == 2
     assert len(f._verify_cache[(int,)]) == 1
+
+
+def test_verify_cache_is_invalidated_by_registration(dispatch):
+    @dispatch
+    def f(x: list[int]):
+        return "list[int]"
+
+    # Warm the bucket for `list` arguments.
+    assert f([1]) == "list[int]"
+    assert set(f._verify_cache) == {(list,)}
+
+    @dispatch
+    def f(x: list[str]):
+        return "list[str]"
+
+    # The new method must make it into the bucket for `list`.
+    assert f(["a"]) == "list[str]"
+    assert f([1]) == "list[int]"
+
+
+def test_verify_cache_clearing(dispatch: plum.Dispatcher):
+    @dispatch
+    def f(x: list[int]):
+        return "list[int]"
+
+    assert f([1]) == "list[int]"
+    assert len(f._verify_cache) == 1
+
+    dispatch.clear_cache()
+    assert len(f._verify_cache) == 0
+
+    assert f([1]) == "list[int]"
+    assert len(f._verify_cache) == 1
+
+    plum.clear_all_cache()
+    assert len(f._verify_cache) == 0

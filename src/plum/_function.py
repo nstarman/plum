@@ -268,6 +268,7 @@ class Function(metaclass=_FunctionMeta):
         # `_pending`/`_resolved`/`_resolver` in multiple steps. See GitHub issue #274.
         with self._lock:
             self._cache.clear()
+            self._verify_cache.clear()
 
             if reregister:
                 # Add all resolved to pending.
