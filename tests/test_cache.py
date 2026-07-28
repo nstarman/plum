@@ -274,6 +274,25 @@ def test_literal_dispatch_covers_subclasses(dispatch):
     assert f(MyInt(1)) == "one"
 
 
+def test_aspect_key_survives_clear_cache_with_reregister(dispatch):
+    """`clear_cache(reregister=True)` installs a fresh, faithful resolver whose
+    methods are only pending. The key callable used for the next call must be the
+    one that resolver ends up with, not a stale faithful `type`."""
+
+    @dispatch
+    def f(x: Literal[1]):
+        return "one"
+
+    @dispatch
+    def f(x: int):
+        return "int"
+
+    assert f(1) == "one"
+    f.clear_cache(reregister=True)
+    assert f(2) == "int"
+    assert f(1) == "one"
+
+
 def test_literal_dispatch_unhashable_argument(dispatch):
     @dispatch
     def f(x: Literal[1]):

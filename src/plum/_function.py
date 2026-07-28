@@ -83,9 +83,9 @@ class Function(metaclass=_FunctionMeta):
 
         self._f: Callable[..., Any] = f
         # Cache maps argument keys to `(method, return_type)`. Keys come either from
-        # `__call__`, where each element is `self._arg_key(arg)` (a plain `type`, or a
-        # `cache_key` tuple when the resolver needs aspects), or from `invoke`, where
-        # each element is a `TypeHint`.
+        # `__call__`, where each element is `self._resolver._arg_key(arg)` (a plain
+        # `type`, or a `cache_key` tuple when the resolver needs aspects), or from
+        # `invoke`, where each element is a `TypeHint`.
         self._cache: dict[tuple[TypeHint, ...], tuple[Callable[..., Any], TypeHint]]
         self._cache = {}
         # Verify cache, used only when the resolver is uncacheable. It maps the bare
@@ -125,9 +125,6 @@ class Function(metaclass=_FunctionMeta):
         self._resolved: list[
             tuple[Callable[..., Any], Signature | None, int | None]
         ] = []
-        # Mirror of `self._resolver._arg_key`, kept in sync whenever registrations
-        # are resolved. Mirrored to save an attribute hop on the dispatch hot path.
-        self._arg_key: Callable[[object], object] = type
 
     @property
     def owner(self) -> type | None:
@@ -340,7 +337,6 @@ class Function(metaclass=_FunctionMeta):
 
             if registered:
                 self._pending = []
-                self._arg_key = self._resolver._arg_key
 
                 # Clear cache. Reenters `self._lock`, which is why it is an `RLock`.
                 self.clear_cache(reregister=False)
@@ -442,7 +438,7 @@ class Function(metaclass=_FunctionMeta):
         # `KeyError` may be swallowed and silently retried.
         if self._pending:
             self._resolve_pending_registrations()
-        key = tuple(map(self._arg_key, args))
+        key = tuple(map(self._resolver._arg_key, args))
         try:
             method, return_type = self._cache[key]
         except KeyError:
@@ -467,16 +463,15 @@ class Function(metaclass=_FunctionMeta):
         if self._pending:
             self._resolve_pending_registrations()
 
-        # Compute the cache key via `self._arg_key`, the mirror of the resolver's
-        # bound key callable (`type` for a faithful or uncacheable resolver, a
-        # `cache_key` specialised to the resolver's aspects otherwise). When called
-        # from `invoke`, `types` is passed directly. Both are hashable and work as
-        # cache keys.
+        # Compute the cache key via the resolver's bound key callable (`type` for a
+        # faithful or uncacheable resolver, a `cache_key` specialised to the
+        # resolver's aspects otherwise). When called from `invoke`, `types` is passed
+        # directly. Both are hashable and work as cache keys.
         if types is None:
             # Attempt to use the cache based on the types of the arguments.
             # At this point, `args` must be a tuple (not `Signature` or `None`).
             assert isinstance(args, tuple)
-            types = tuple(map(self._arg_key, args))
+            types = tuple(map(self._resolver._arg_key, args))
 
         # Tier two. An uncacheable resolver cannot memoise a method, because no
         # bounded key determines which method matches. What it can memoise is which
