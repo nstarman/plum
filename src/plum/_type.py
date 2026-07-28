@@ -389,9 +389,20 @@ def cache_key(
     """Cache key for a value `x`, capturing the requested `aspects`.
 
     For any hint `t` with `is_cacheable(t)`, whether `x` matches `t` depends only on
-    `cache_key(x)`, so a dispatch result for `x` can be memoised under this key. The
-    key is `(type(x), *slots)`; a resolver passes only the aspects its own types need,
-    so it never captures more than necessary. Adding an aspect adds a slot here.
+    `cache_key(x)`, so a dispatch result for `x` can be memoised under this key. A
+    resolver passes only the aspects its own types need, so it never captures more
+    than necessary.
+
+    The exact width of the returned tuple and the order of its slots are an
+    implementation detail: every aspect added to :class:`Aspect` adds a slot to the
+    default key. Only the contract is stable: equal keys imply the same match result.
+
+    Note that the identity and value slots keep a strong reference to `x` — necessarily,
+    since that is what makes `id`-based hashing safe. A function dispatching on
+    `type[X]` or `Literal` therefore accumulates one cache entry per distinct argument
+    class or value, and pins that class or value, for the function's lifetime;
+    dynamically created classes are not collected. Call `f.clear_cache()` (or
+    :func:`plum.clear_all_cache`) to release them.
     """
     key: tuple[object, ...] = (type(x),)
     if Aspect.IDENTITY in aspects:

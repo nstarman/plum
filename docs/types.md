@@ -93,9 +93,11 @@ For example, this means that `list[T1]` is a subtype of `list[T2]` whenever
 Plum achieves performance by caching the dispatch process.
 Unfortunately, efficient caching is not always possible.
 Efficient caching is possible for so-called _cacheable_ types. The dispatch result for
-an argument `x` is cached under `cache_key(x)`, which is built from `type(x)` plus, when
-some method needs it, the identity of `x` when `x` is itself a class and the value of
-`x` when `x` is a value a `Literal` could match.
+an argument `x` is cached under a key derived from `type(x)` plus, only when some
+method needs it, the identity of `x` when `x` is itself a class and the value of `x`
+when `x` is a value a `Literal` could match. `cache_key(x)` returns that key as a
+tuple; a function all of whose methods are faithful needs none of the extra slots and
+keys on `type(x)` directly.
 
 ````{admonition} Definition: cacheable type
 A type `t` is _cacheable_ if, for all `x`, whether `x` matches `t` is a function of
@@ -126,6 +128,16 @@ faithful:
 
 For example, `int` is faithful, since `type(1) == int`;
 but `Literal[1]` is not faithful, since `issubclass(int, Literal[1])` is false.
+
+```{admonition} Caching `type[X]` and `Literal` retains arguments
+:class: warning
+A function dispatching on `type[X]` or `Literal[...]` gets one cache entry per
+distinct argument class or value, and the key holds a strong reference to it — that
+reference is what makes identity-based keying sound. So the cache grows with the
+number of distinct classes or values passed, and dynamically created classes stay
+alive for the lifetime of the function. Call `f.clear_cache()` or
+`plum.clear_all_cache()` to release them.
+```
 
 Methods which have signatures that depend only on cacheable types will
 be performant.
