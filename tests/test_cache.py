@@ -747,6 +747,30 @@ def test_verify_cache_does_not_order_an_incomparable_bucket(dispatch):
         f([])
 
 
+def test_verify_cache_settles_an_unordered_bucket_on_a_unique_match(dispatch):
+    @dispatch
+    def f(x: list[int]):
+        return "list[int]"
+
+    @dispatch
+    def f(x: list[str]):
+        return "list[str]"
+
+    # An unordered bucket can still settle a call that matches exactly one of its
+    # methods: that method is the only candidate full resolution can collect.
+    assert f([1]) == "list[int]"
+    assert f(["a"]) == "list[str]"
+    assert not f._verify_cache[(list,)][2]
+
+    # Several matches fall through to full resolution, which finds the ambiguity.
+    with pytest.raises(plum.AmbiguousLookupError):
+        f([])
+    # So does no match at all, which reports every method, not just the bucket.
+    with pytest.raises(plum.NotFoundLookupError) as e:
+        f([1.0])
+    assert len(e.value.methods) == 2
+
+
 def test_verify_cache_ordering_ignores_precedence(dispatch):
     @dispatch(precedence=5)
     def f(x: list):
