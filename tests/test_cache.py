@@ -171,3 +171,32 @@ def test_cache_unfaithful(dispatch: plum.Dispatcher):
     assert f(1) == 1
     assert f([1]) == 2
     assert len(f._cache) == 0
+
+
+def test_type_dispatch_is_cached(dispatch):
+    @dispatch
+    def g(x: type[int]):
+        return "type[int]"
+
+    @dispatch
+    def g(x: type[str]):
+        return "type[str]"
+
+    g._resolve_pending_registrations()
+    assert g._resolver.is_cacheable and not g._resolver.is_faithful
+    assert len(g._cache) == 0
+    assert g(int) == "type[int]"
+    assert g(str) == "type[str]"
+    assert len(g._cache) == 2  # keyed by identity, one entry per class
+
+
+def test_faithful_class_args_share_one_entry(dispatch):
+    @dispatch
+    def h(x: object):
+        return "object"
+
+    h._resolve_pending_registrations()
+    assert h._resolver.is_faithful
+    for cls in (int, str, float, list, dict):
+        assert h(cls) == "object"
+    assert len(h._cache) == 1  # faithful ⇒ keyed on type(x)=type, one bucket

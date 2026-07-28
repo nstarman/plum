@@ -689,3 +689,79 @@ def test_resolve_pending_registrations_is_thread_safe():
             assert f(1.0) == "float"
     finally:
         sys.setswitchinterval(old_interval)
+
+
+def test_type_dispatch_correctness(dispatch):
+    class Base:
+        pass
+
+    class Sub(Base):
+        pass
+
+    @dispatch
+    def f(x: int):
+        return "inst-int"
+
+    @dispatch
+    def f(x: type[int]):
+        return "type[int]"
+
+    @dispatch
+    def f(x: type[Base]):
+        return "type[Base]"
+
+    @dispatch
+    def f(x: type[Sub]):
+        return "type[Sub]"
+
+    assert f(5) == "inst-int"  # instance vs class: no collision
+    assert f(int) == "type[int]"
+    assert f(Sub) == "type[Sub]"  # subclass beats base
+    assert f(Base) == "type[Base]"
+
+
+def test_type_dispatch_pathological_metaclass(dispatch):
+    # Unhashable class must dispatch, not raise TypeError.
+    class MetaUnhashable(type):
+        def __eq__(cls, other):
+            return cls is other
+
+    class C(metaclass=MetaUnhashable):
+        pass
+
+    @dispatch
+    def f(x: type[int]):
+        return "int"
+
+    @dispatch
+    def f(x: type[object]):
+        return "object"
+
+    assert f(C) == "object"
+
+    # Lying-eq metaclass must not mis-cache.
+    class MetaLie(type):
+        def __eq__(cls, other):
+            return True
+
+        def __hash__(cls):
+            return 7
+
+    class A(int, metaclass=MetaLie):
+        pass
+
+    class B(metaclass=MetaLie):
+        pass
+
+    assert f(A) == "int"
+    assert f(B) == "object"
+
+
+def test_type_matches_only_classes_beartype_invariant():
+    # Pins the one external assumption behind cacheable `type[X]`: no non-class
+    # matches `type[T]`. If beartype changes this, cache_key soundness breaks.
+    from plum._bear import is_bearable
+
+    non_classes = [5, list[int], tuple[int], (lambda: 0), int | str]
+    for x in non_classes:
+        assert is_bearable(x, type[object]) is False

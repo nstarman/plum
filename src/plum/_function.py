@@ -435,15 +435,15 @@ class Function(metaclass=_FunctionMeta):
         if self._pending:
             self._resolve_pending_registrations()
 
-        # Compute cache key. When called from `__call__`, types will be actual
-        # runtime types from `map(type, args)`. When called from `invoke`, types
-        # may be `TypeHints` like `Union[int, str]`. Both are hashable and work
-        # as cache keys.
+        # Compute the cache key via the resolver's bound `_arg_key` (`type` for a
+        # faithful/uncacheable resolver, an identity-aware `cache_key` for one that
+        # dispatches on `type[X]`). When called from `invoke`, `types` is passed
+        # directly. Both are hashable and work as cache keys.
         if types is None:
             # Attempt to use the cache based on the types of the arguments.
             # At this point, `args` must be a tuple (not `Signature` or `None`).
             assert isinstance(args, tuple)
-            types = tuple(map(type, args))
+            types = tuple(map(self._resolver._arg_key, args))
         try:
             return self._cache[types]
         except KeyError:
@@ -454,9 +454,9 @@ class Function(metaclass=_FunctionMeta):
 
             # Cache miss. Run the resolver based on the arguments.
             method, return_type = self.resolve_method(args)
-            # If the resolver is faithful, then we can perform caching using the types
-            # of the arguments. If the resolver is not faithful, then we cannot.
-            if self._resolver.is_faithful:
+            # Cache only when the resolver is cacheable; otherwise `cache_key` would
+            # not uniquely determine the matching method.
+            if self._resolver.aspects is not None:
                 self._cache[types] = method, return_type
             return method, return_type
 
