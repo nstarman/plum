@@ -51,6 +51,36 @@ def test_function():
     assert Function._instances[-1] == g
 
 
+def test_module_of_a_function_without_one(dispatch: plum.Dispatcher):
+    """`__module__` mirrors the wrapped function, `None` included.
+
+    A function `exec`ed in a namespace without `__name__` — a doctest under Sybil,
+    say — has `__module__ is None`. `classmethod` copies `__module__` off what it
+    wraps, so `@classmethod` over `@dispatch` reads `_ModuleDescriptor` while the
+    class body runs, and a `str`-annotated descriptor made a `mypyc`-compiled build
+    raise `TypeError` there. See `docs/parametric.md`.
+    """
+    ns = {"dispatch": dispatch}
+    exec(  # noqa: S102
+        "class A:\n"
+        "    @classmethod\n"
+        "    @dispatch\n"
+        "    def f(cls, x: int):\n"
+        "        return x\n",
+        ns,
+    )
+    a_cls = ns["A"]
+
+    assert a_cls.__dict__["f"].__func__.__module__ is None
+    assert a_cls.f.__module__ is None
+    assert a_cls.f(1) == 1
+
+    # A callable with no `__module__` at all reads as `None` too, not `AttributeError`.
+    g = Function(lambda x: x)
+    del g._f.__module__
+    assert g.__module__ is None
+
+
 def test_repr(dispatch: plum.Dispatcher):
     @dispatch
     def f(x: int):
@@ -316,8 +346,10 @@ def test_function_multi_dispatch(dispatch: plum.Dispatcher):
     assert f("1") == "float or str"
     assert f._resolver.resolve(("1",)).signature.precedence == 1
 
-    # Check that arguments to `f.dispatch_multi` must be tuples or signatures.
-    with pytest.raises(ValueError):
+    # Check that arguments to `f.dispatch_multi` must be tuples or signatures. This is a
+    # `TypeError` in both the pure-Python and compiled builds (the compiled build raises
+    # it at the typed-vararg C boundary).
+    with pytest.raises(TypeError):
         f.dispatch_multi(1)
 
 
