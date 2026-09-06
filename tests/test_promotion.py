@@ -231,6 +231,7 @@ def test_convert_does_not_build_an_invoke_wrapper(monkeypatch):
 
     assert f(1) == 1
 
+
 # The tests below check the cache of identity conversions. They call a dispatched
 # function with a return annotation, which is the path that the cache speeds up.
 

@@ -26,12 +26,19 @@ SomeExceptionType = TypeVar("SomeExceptionType", bound=Exception)
 
 
 _identity_conversions: dict[tuple[type, TypeHint], bool] = {}
-"""dict[tuple[type, TypeHint], bool]: Whether conversion is the identity for a
+"""dict[tuple[type, TypeHint], bool]: Whether `convert` can be skipped outright for a
 `(type(obj), target_type)` pair.
 
+`True` means the conversion is the identity for *every* object of that type: the
+fallback method applied and `target_type` is faithful, so the answer is a property of
+the type rather than of the value. `False` is the weaker "not safe to skip", which
+also covers a pair whose conversion happens to be the identity for a particular value
+but cannot be settled by type -- an unfaithful target, or a conversion method that
+applies. Missing means "not yet analysed".
+
 Written by :func:`plum.convert`, which decides what is recordable; read here because
-this is the hot path. Missing means "not yet analysed". Same staleness contract as
-:attr:`Function._cache`: mutating a type's meaning in place needs `clear_all_cache`."""
+this is the hot path. Same staleness contract as :attr:`Function._cache`: mutating a
+type's meaning in place needs `clear_all_cache`."""
 
 
 def _convert(obj: Any, target_type: TypeHint, /) -> Any:
