@@ -16,7 +16,7 @@ from beartype.door import TypeHint
 import plum._function
 from ._bear import is_bearable
 from ._dispatcher import Dispatcher
-from ._type import _type_hint_eq, resolve_type_hint
+from ._type import _type_hint_eq, is_faithful, resolve_type_hint
 from .repr import repr_short
 
 T = TypeVar("T")
@@ -31,6 +31,12 @@ else:
 
 _dispatch = Dispatcher()
 
+_IDENTITY_CONVERSION_LIMIT = 4096
+"""int: Maximum number of entries in :obj:`plum._function._identity_conversions`.
+
+Entries come from annotations and argument types, not from data, so this is a ceiling
+for the pathological case only: past it, pairs just take the full conversion path."""
+
 
 @_dispatch
 def convert(obj: object, type_to: typeTypeTo) -> TypeTo:
@@ -43,15 +49,41 @@ def convert(obj: object, type_to: typeTypeTo) -> TypeTo:
     Returns:
         object: `obj` converted to type `type_to`.
     """
-    type_to = resolve_type_hint(type_to)
+    # The fallback conversion method only checks that `obj` is an instance of `type_to`
+    # and returns `obj` unchanged. Every call of a function with a return annotation
+    # goes through here, so this is worth optimising. If `type_to` is faithful, the
+    # instance check depends only on `type(obj)`, so whether the conversion is the
+    # identity can be cached by `(type(obj), type_to)`. That is what is implemented
+    # below.
+
     # TODO: Can we implement this without using `type`?!
-    # Resolve and call the method directly. `_convert.invoke` reads better, but it
-    # builds an `_InvokedMethod` wrapper that is called once and discarded, and
-    # `Function.__call__` routes every non-`Any` return annotation through here.
+    type_from = type(obj)
+    cache = plum._function._identity_conversions
+    # Keyed on `type_to` as received, so that a cache hit avoids `resolve_type_hint`.
+    known: bool | None = cache.get((type_from, type_to))
+    if known:
+        return obj
+
+    type_to_resolved = resolve_type_hint(type_to)
+    # Resolve and call the method directly: `_convert.invoke` would build an
+    # `_InvokedMethod` wrapper per call, and nothing here reads its metadata.
     method, return_type = _convert._resolve_method_with_cache(
-        types=(type(obj), type_to)
+        types=(type_from, type_to_resolved)
     )
-    return plum._function._convert(method(obj, type_to), return_type)
+    # As `invoke` does, convert the result per the method's own return annotation.
+    # That annotation is `Any` for every conversion method, so this is free.
+    result = plum._function._convert(method(obj, type_to_resolved), return_type)
+
+    # Record whether the conversion is the identity: the fallback applied, and
+    # `type_to` is faithful so that its instance check depends only on `type_from`.
+    # Negatives are recorded too, because `is_faithful` is not cached and would
+    # otherwise run on every call.
+    if known is None and len(cache) < _IDENTITY_CONVERSION_LIMIT:
+        # `_convert._f` is the fallback that `_convert` wraps.
+        no_method_applied = method is _convert._f
+        cache[type_from, type_to] = no_method_applied and is_faithful(type_to_resolved)
+
+    return result
 
 
 # Deliver `convert`.
@@ -60,6 +92,11 @@ plum._function._promised_convert = convert
 
 @_dispatch
 def _convert(obj, type_to):  # type: ignore[no-untyped-def]
+    """Fallback conversion: check the type and return `obj` unchanged.
+
+    :func:`convert` recognises this fallback via `_convert._f` to conclude that no
+    conversion method applied.
+    """
     if not is_bearable(obj, resolve_type_hint(type_to)):
         raise TypeError(f"Cannot convert `{obj}` to `{repr_short(type_to)}`.")
     return obj
@@ -86,6 +123,10 @@ def add_conversion_method(
     @_convert.dispatch
     def perform_conversion(obj: type_from, _: type_to):
         return f(obj)
+
+    # This method may now claim a pair recorded as an identity: `type_from` can be a
+    # subclass of `type_to`. Dropping the whole cache is cheap; registration is rare.
+    plum._function._identity_conversions.clear()
 
 
 def conversion_method(
