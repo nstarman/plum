@@ -45,7 +45,13 @@ def convert(obj: object, type_to: typeTypeTo) -> TypeTo:
     """
     type_to = resolve_type_hint(type_to)
     # TODO: Can we implement this without using `type`?!
-    return _convert.invoke(type(obj), type_to)(obj, type_to)
+    # Resolve and call the method directly. `_convert.invoke` reads better, but it
+    # builds an `_InvokedMethod` wrapper that is called once and discarded, and
+    # `Function.__call__` routes every non-`Any` return annotation through here.
+    method, return_type = _convert._resolve_method_with_cache(
+        types=(type(obj), type_to)
+    )
+    return plum._function._convert(method(obj, type_to), return_type)
 
 
 # Deliver `convert`.
