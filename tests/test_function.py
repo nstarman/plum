@@ -766,6 +766,51 @@ def test_resolution_overtaken_by_a_clear_is_not_cached(monkeypatch, dispatch):
     assert f(1) == "v2"
 
 
+@pytest.mark.incompatible_with_mypyc
+def test_type_x_resolution_overtaken_by_a_clear_is_not_cached(monkeypatch, dispatch):
+    """The `type[X]`-cached path (added by #305) must honour the same lost-update
+    guard as the faithful path: a registration landing mid-resolution must not leave
+    a stale method cached under `KeyPart.IDENTITY`-bearing keys either.
+    """
+
+    class Foo:
+        pass
+
+    @dispatch
+    def f(x: type[Foo]):
+        return "v1"
+
+    f._resolve_pending_registrations()
+
+    resolved, invalidated = threading.Event(), threading.Event()
+    original, target = Function.resolve_method, f
+
+    def parked(self, *args, **kw_args):
+        out = original(self, *args, **kw_args)
+        # Scoped by identity: `Function` is a `mypyc` native class, so there is no
+        # instance `__dict__` to hang a flag on, and other functions resolve here too.
+        if self is target:
+            resolved.set()
+            # Park between resolving and storing, which is where the clear lands.
+            assert invalidated.wait(5), "the clear never landed"
+        return out
+
+    monkeypatch.setattr(Function, "resolve_method", parked)
+    with ThreadPoolExecutor(1) as pool:
+        call = pool.submit(f, Foo)
+        assert resolved.wait(5), "the parked thread never reached the park"
+
+        @dispatch
+        def f(x: type[Foo]):  # noqa: F811
+            return "v2"
+
+        f._resolve_pending_registrations()
+        invalidated.set()
+        call.result(5)
+
+    assert f(Foo) == "v2"
+
+
 def test_wraps_matches_functools_wraps():
     """The fast metadata copy must be observationally identical to `functools.wraps`.
 
