@@ -1,4 +1,5 @@
 import sys
+import weakref
 from typing import Union
 
 import numpy as np
@@ -100,7 +101,7 @@ def test_get_context():
 def test_comparable_has_empty_slots():
     # Without this, a subclass declaring `__slots__` still gets a `__dict__` and the
     # declaration is silently a no-op.
-    assert Comparable.__slots__ == ()
+    assert Comparable.__slots__ == ("__weakref__",)
 
     class Slotted(Comparable):
         __slots__ = ("v",)
@@ -115,6 +116,9 @@ def test_comparable_has_empty_slots():
     assert not hasattr(s, "__dict__")
     with pytest.raises(AttributeError):
         s.extra = 2
+
+    # Dropping the `__dict__` must not also drop weak referenceability.
+    assert weakref.ref(s)() is s
 
     # A subclass that declares no `__slots__` of its own is unaffected.
     class Unslotted(Comparable):
