@@ -36,7 +36,7 @@ class NativeBase:
 
     Such a weak reference can be *taken*, but not relied on to notify: the compiled
     deallocator omits `PyObject_ClearWeakRefs()`, so its callback never runs and a
-    `WeakSet` or `WeakValueDictionary` keeps a stale entry that can segfault the
+    `weakref.WeakSet` or `weakref.WeakValueDictionary` keeps a stale entry that can segfault the
     interpreter at shutdown. See mypyc/mypyc#1102; python/mypy#19056 is the fix.
 
     `jax.jit` is unaffected: it holds the reference itself rather than asking to be
